@@ -79,7 +79,7 @@ Edge scroll, WASD/arrows, middle-mouse drag, wheel zoom. 2D now, 2.5D later.
 | Step | What | Where | Status |
 |---|---|---|---|
 | C0 | Single unit, hard-coded Move on right click, interpolation | game | ✅ |
-| C1 | `phalanx_input` (InputState, drag detection, Bindings) + macroquad adapter; drag rect drawn | engine | ⬜ |
+| C1 | `phalanx_input` (InputState, drag detection, Bindings) + macroquad adapter; drag rect drawn | engine | ✅ |
 | C2 | Many units, `Team`, click/box/Shift selection, selection circles | game | ⬜ |
 | C3 | `Orders` replaces `MoveTarget`; Move/Stop/Hold; ownership check | game sim | ⬜ |
 | C4 | Group movement keeping formation shape | game sim | ⬜ |
@@ -90,7 +90,9 @@ Edge scroll, WASD/arrows, middle-mouse drag, wheel zoom. 2D now, 2.5D later.
 
 ## Status
 
-**Implemented:** C0. `Command::Move` with a `MoveTarget` component, straight-line movement, render
+**Implemented:** C0, C1.
+- C0: `Command::Move` with a `MoveTarget` component, straight-line movement, render interpolation, determinism test.
+- C1: all input goes through `phalanx_input` (`backend::mq::poll` once per frame). Right click moves on *press*. Left drag shows a box, left click/box is recorded in the debug overlay. `controls.rs` holds the game `Action` enum and default bindings (F1 = toggle debug overlay).
 interpolation, determinism test. Input read directly from macroquad in `dotwars_client`.
 
-**Next:** C1.
+**Next:** C2 (many units, `Team`, selection).

@@ -300,10 +300,15 @@ version = "0.1.0"
 dependencies = [
  "macroquad",
  "phalanx_core",
+ "phalanx_input",
 ]
 
 [[package]]
 name = "phalanx_core"
+version = "0.1.0"
+
+[[package]]
+name = "phalanx_input"
 version = "0.1.0"
 
 [[package]]
