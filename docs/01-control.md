@@ -80,10 +80,10 @@ Edge scroll, WASD/arrows, middle-mouse drag, wheel zoom. 2D now, 2.5D later.
 |---|---|---|---|
 | C0 | Single unit, hard-coded Move on right click, interpolation | game | ✅ |
 | C1 | `phalanx_input` (InputState, drag detection, Bindings) + macroquad adapter; drag rect drawn | engine | ✅ |
-| C2 | Many units, `Team`, click/box/Shift selection, selection circles | game | ⬜ |
-| C3 | `Orders` replaces `MoveTarget`; Move/Stop/Hold; ownership check | game sim | ⬜ |
+| C2 | Many units, `Team`, click/box/Shift selection, selection circles | game | ✅ |
+| C3 | `Orders` replaces `MoveTarget`; Move/Stop/Hold; ownership check | game sim | ✅ |
 | C4 | Group movement keeping formation shape | game sim | ⬜ |
-| C5 | Camera pan/zoom + control groups | engine + game | ⬜ |
+| C5 | Camera pan/zoom + control groups | engine + game | ✅ |
 | C6 | Shift command queue + click markers | game | ⬜ |
 | C7 | Attack, AttackMove: commands defined now, behaviour with combat ([04](04-combat.md)) | game | ⬜ |
 | — | Patrol, rally points, double-click select-type, formations | game | ⬜ later |
@@ -224,7 +224,7 @@ impl RtsCameraController {
 > **Known issue:** macroquad keeps reporting the last mouse position when the cursor leaves the window, so edge scroll keeps going. The setting `edge_margin = 0` turns it off; winit's `CursorLeft` event fixes it in R1.
 
 ### Game: `dotwars_client`
-- `controls.rs`: `PanUp/Down/Left/Right` (WASD + arrows). The game turns held keys into `pan_dir` via `Bindings::is_held`.
+- `controls.rs`: `PanUp/Down/Left/Right` (**arrow keys only**: WASD would collide with S = Stop). The game turns held keys into `pan_dir` via `Bindings::is_held`.
 - Map size: a `MAP_SIZE` constant for now (e.g. 2000 × 1500 world units) and a grid drawn every 100 units so movement is visible. The real map comes from [05](05-map.md).
 - `groups.rs`: `ControlGroups { groups: [Vec<UnitId>; 10], last_tap: Option<(u8, f64)> }`:
 
@@ -250,8 +250,24 @@ zooms toward the cursor; Ctrl+1, then 1, re-selects a group, and double-tapping 
 
 ## Status
 
-**Implemented:** C0, C1.
-- C0: `Command::Move` with a `MoveTarget` component, straight-line movement, render interpolation, determinism test.
-- C1: all input goes through `phalanx_input` (`backend::mq::poll` once per frame). Right click moves on *press*. Left drag shows a box, left click/box is recorded in the debug overlay. `controls.rs` holds the game `Action` enum and default bindings (F1 = toggle debug overlay).
+**Implemented:** C0, C1, C2, C3, C5. (C4 formation movement, C6 Shift key for queued orders and click markers, C7 attack are next.)
+- C0: `Command::Move`, straight-line movement, render interpolation, determinism test.
+- C1: all input goes through `phalanx_input` (`backend::mq::poll` once per frame). `controls.rs` holds the game `Action` enum and default bindings.
+- C2: `Team`, `Body`, `UnitId → Entity` index, `DotWars::demo_scenario` (12 own, 8 enemy units). Client: `view.rs` (interpolated `UnitView`), `selection.rs` (`pick`, `box_select`, `Selection`), team colors and selection rings.
+- C3: `Orders { current, queue }` replaces `MoveTarget`. `Command::{Move { queue }, Stop, Hold}`. The sim ignores units the player doesn't own, dead units and duplicate ids; the result doesn't depend on list order. `queue: true` is already implemented in the sim (the client sends `false` until C6). `Orders` is part of `checksum()`.
+- C5: `phalanx_input::mouse_delta`; `phalanx_client::camera` (`Camera::{center_on, zoom_at, clamp_to}`, `RtsCameraController`); client `groups.rs`, a 2000×1500 map with a grid.
 
-**Next:** C2 (many units, `Team`, selection).
+**Differences from the plan**
+- Pan keys are the arrow keys only (WASD collides with S = Stop). Rebind in `controls.rs`.
+- `Selection::click` on empty ground with Shift does nothing (only plain click clears).
+- Ctrl+N with an empty selection is ignored, so a stray press can't wipe a group.
+- Right click does nothing when the selection has no own units.
+- Dead units are pruned from the selection after every tick; groups prune when used.
+- Tests: sim 10, client 16 (selection, groups, controls), `phalanx_client` camera 10, `phalanx_input` 12.
+
+**Not verified by a human yet — check by hand (the "done when" lists above):**
+1. C2: box-select part of the blue block, Shift-click one more, right-click: only those move. Click a red unit: yellow ring, right click does nothing.
+2. C3: S stops a moving group, H holds it.
+3. C5: arrows, window edges and middle mouse pan; wheel zooms toward the cursor; Ctrl+1 then 1 re-selects; double tap 1 jumps the camera.
+
+**Next:** C4 (group movement keeping its shape), then C6.

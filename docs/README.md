@@ -12,7 +12,7 @@ Status legend: ✅ done · 🚧 in progress · ⬜ planned · 📝 design not wr
 
 | # | System | Design | Progress |
 |---|---|---|---|
-| 01 | [Control](01-control.md) | ✅ written | 🚧 C0–C1 done, next C2 |
+| 01 | [Control](01-control.md) | ✅ written | 🚧 C0–C3, C5 done; next C4, C6, C7 |
 | 02 | [Economy](02-economy.md) | 📝 | ⬜ |
 | 03 | [Production](03-production.md) | 📝 | ⬜ |
 | 04 | [Combat](04-combat.md) | 📝 | ⬜ |
