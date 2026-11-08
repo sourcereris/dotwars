@@ -6,7 +6,7 @@ Built on the engine in [`../phalanx`](../phalanx), which must sit next to this f
 ```
 GameDev/Rust/
   phalanx/   engine (own repo, own workspace)
-  dotwars/         this game (own workspace)
+  dotwars/   this game (own repo, own workspace)
 ```
 
 ## Run
@@ -15,7 +15,15 @@ GameDev/Rust/
 cargo run -p dotwars_client
 ```
 
-Right click moves the unit.
+| Input | Action |
+|---|---|
+| Left click / drag | select unit / box-select own units (Shift adds or toggles) |
+| Right click | move selected own units |
+| `S` / `H` | stop / hold position |
+| `Ctrl+N` / `Shift+N` / `N` | assign / add to / select control group N (tap `N` twice to center camera) |
+| Arrows, window edges, middle mouse | pan camera |
+| Mouse wheel | zoom toward cursor |
+| `F1` | toggle debug overlay |
 
 ## Crates
 
