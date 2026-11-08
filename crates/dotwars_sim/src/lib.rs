@@ -2,9 +2,14 @@
 #![deny(clippy::disallowed_types, clippy::disallowed_methods)]
 
 pub mod components;
+pub mod economy;
 mod systems;
 
-use components::{Body, ObjectId, Order, Orders, Position, PrevPosition, Team};
+use components::{
+    Body, DropOff, GatherState, ObjectId, Order, Orders, PlayerStock, Position, PrevPosition,
+    ResourceNode, Team, Worker,
+};
+use economy::{DROPOFF_RADIUS, NODE_AMOUNT, NODE_RADIUS, START_STOCK, WORKER_RADIUS};
 use hecs::{Entity, World};
 use phalanx_core::{Checksum, Fixed, FixedVec2, IdGen, PlayerId, Rng};
 use phalanx_sim::Simulation;
@@ -25,10 +30,25 @@ pub enum Command {
     Hold {
         units: Vec<ObjectId>,
     },
+    /// Workers harvest `node` and deliver to the nearest own drop-off. Other units ignore it.
+    Gather {
+        units: Vec<ObjectId>,
+        node: ObjectId,
+        queue: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Event {}
+pub enum Event {
+    /// A worker delivered `amount` minerals to `dropoff`.
+    Deposited {
+        player: PlayerId,
+        dropoff: ObjectId,
+        amount: u32,
+    },
+    /// The node ran dry and is already gone, hence the position.
+    NodeDepleted { node: ObjectId, pos: FixedVec2 },
+}
 
 pub const UNIT_RADIUS: Fixed = Fixed::from_int(8);
 
@@ -38,6 +58,8 @@ pub struct DotWars {
     ids: IdGen,
     /// ObjectId -> Entity. Sorted by key, so iterating it is deterministic.
     index: BTreeMap<ObjectId, Entity>,
+    /// Per-player stockpile. Not a component: it belongs to the player, not to an entity.
+    stocks: BTreeMap<PlayerId, PlayerStock>,
 }
 
 impl DotWars {
@@ -47,6 +69,7 @@ impl DotWars {
             rng: Rng::new(seed),
             ids: IdGen::default(),
             index: BTreeMap::new(),
+            stocks: BTreeMap::new(),
         }
     }
 
@@ -65,7 +88,29 @@ impl DotWars {
                 sim.spawn_unit(pos, PlayerId(1));
             }
         }
+        sim.add_base(PlayerId(0), 250, 1);
+        sim.add_base(PlayerId(1), 1750, -1);
         sim
+    }
+
+    /// A drop-off, a field of nodes on the side facing the middle (`dir` = 1 right, -1 left),
+    /// five workers and the starting stock.
+    fn add_base(&mut self, owner: PlayerId, x: i32, dir: i32) {
+        self.spawn_dropoff(FixedVec2::from_ints(x, 500), owner);
+        for (dx, dy) in [
+            (170, -90),
+            (190, -30),
+            (190, 30),
+            (170, 90),
+            (140, 140),
+            (140, -140),
+        ] {
+            self.spawn_node(FixedVec2::from_ints(x + dx * dir, 500 + dy), NODE_AMOUNT);
+        }
+        for i in 0..5 {
+            self.spawn_worker(FixedVec2::from_ints(x - 40 + i * 20, 550), owner);
+        }
+        self.set_stock(owner, START_STOCK);
     }
 
     pub fn spawn_unit(&mut self, pos: FixedVec2, owner: PlayerId) -> ObjectId {
@@ -82,6 +127,62 @@ impl DotWars {
         ));
         self.index.insert(id, e);
         id
+    }
+
+    pub fn spawn_worker(&mut self, pos: FixedVec2, owner: PlayerId) -> ObjectId {
+        let id = self.spawn_unit(pos, owner);
+        let e = self.entity(id).expect("just spawned");
+        let _ = self.world.insert(
+            e,
+            (
+                Worker::default(),
+                Body {
+                    radius: WORKER_RADIUS,
+                },
+            ),
+        );
+        id
+    }
+
+    pub fn spawn_node(&mut self, pos: FixedVec2, amount: u32) -> ObjectId {
+        let id = ObjectId(self.ids.next_id());
+        let e = self.world.spawn((
+            id,
+            Position(pos),
+            Body {
+                radius: NODE_RADIUS,
+            },
+            ResourceNode {
+                amount,
+                harvester: None,
+            },
+        ));
+        self.index.insert(id, e);
+        id
+    }
+
+    pub fn spawn_dropoff(&mut self, pos: FixedVec2, owner: PlayerId) -> ObjectId {
+        let id = ObjectId(self.ids.next_id());
+        let e = self.world.spawn((
+            id,
+            Position(pos),
+            Team(owner),
+            Body {
+                radius: DROPOFF_RADIUS,
+            },
+            DropOff,
+        ));
+        self.index.insert(id, e);
+        id
+    }
+
+    /// Minerals in `player`'s stockpile.
+    pub fn stock(&self, player: PlayerId) -> u32 {
+        self.stocks.get(&player).map_or(0, |s| s.minerals)
+    }
+
+    pub fn set_stock(&mut self, player: PlayerId, minerals: u32) {
+        self.stocks.entry(player).or_default().minerals = minerals;
     }
 
     pub fn despawn(&mut self, id: ObjectId) {
@@ -133,6 +234,23 @@ impl DotWars {
                 queue,
             } => self.give_orders(player, units, Order::Move(*target), *queue),
             Command::Hold { units } => self.give_orders(player, units, Order::Hold, false),
+            Command::Gather { units, node, queue } => {
+                let is_node = self
+                    .entity(*node)
+                    .is_some_and(|e| self.world.satisfies::<&ResourceNode>(e).unwrap_or(false));
+                if is_node {
+                    let workers: Vec<ObjectId> = units
+                        .iter()
+                        .copied()
+                        .filter(|id| {
+                            self.entity(*id).is_some_and(|e| {
+                                self.world.satisfies::<&Worker>(e).unwrap_or(false)
+                            })
+                        })
+                        .collect();
+                    self.give_orders(player, &workers, Order::Gather(*node), *queue);
+                }
+            }
             Command::Stop { units } => {
                 for e in self.owned_targets(player, units) {
                     if let Ok(mut o) = self.world.get::<&mut Orders>(e) {
@@ -152,6 +270,30 @@ fn hash_order(h: &mut Checksum, o: &Order) {
             h.i32(t.y.raw());
         }
         Order::Hold => h.u32(2),
+        Order::Gather(n) => {
+            h.u32(3);
+            h.u32(n.0);
+        }
+    }
+}
+
+fn hash_gather_state(h: &mut Checksum, s: GatherState) {
+    match s {
+        GatherState::Idle => h.u32(0),
+        GatherState::ToNode { node, waited } => {
+            h.u32(1);
+            h.u32(node.0);
+            h.u32(waited as u32);
+        }
+        GatherState::Harvesting { node, ticks_left } => {
+            h.u32(2);
+            h.u32(node.0);
+            h.u32(ticks_left as u32);
+        }
+        GatherState::Returning { node } => {
+            h.u32(3);
+            h.u32(node.0);
+        }
     }
 }
 
@@ -159,7 +301,7 @@ impl Simulation for DotWars {
     type Command = Command;
     type Event = Event;
 
-    fn tick(&mut self, commands: &[(PlayerId, Command)], _events: &mut Vec<Event>) {
+    fn tick(&mut self, commands: &[(PlayerId, Command)], events: &mut Vec<Event>) {
         // Fixed system order.
         systems::store_prev_positions(&mut self.world);
         for (player, cmd) in commands {
@@ -167,6 +309,8 @@ impl Simulation for DotWars {
         }
         systems::advance_orders(&mut self.world);
         systems::movement(&mut self.world);
+        self.run_gather(events);
+        self.run_depletion(events);
     }
 
     fn checksum(&self) -> u64 {
@@ -196,6 +340,21 @@ impl Simulation for DotWars {
                     hash_order(&mut h, q);
                 }
             }
+            if let Ok(w) = self.world.get::<&Worker>(e) {
+                h.u32(w.carry);
+                hash_gather_state(&mut h, w.state);
+            }
+            if let Ok(n) = self.world.get::<&ResourceNode>(e) {
+                h.u32(n.amount);
+                h.u32(n.harvester.map_or(u32::MAX, |i| i.0));
+            }
+            if self.world.satisfies::<&DropOff>(e).unwrap_or(false) {
+                h.u32(0xD0);
+            }
+        }
+        for (p, s) in &self.stocks {
+            h.u32(p.0 as u32);
+            h.u32(s.minerals);
         }
         h.finish()
     }
@@ -262,14 +421,19 @@ mod tests {
         let a = DotWars::demo_scenario(1);
         let b = DotWars::demo_scenario(1);
         assert_eq!(a.checksum(), b.checksum());
+        // Units (with Orders): 12 + 5 workers vs 8 + 5 workers. Buildings are not units.
         let count = |p| {
             a.world
-                .query::<&Team>()
+                .query::<(&Team, &Orders)>()
                 .iter()
-                .filter(|(_, t)| t.0 == p)
+                .filter(|(_, (t, _))| t.0 == p)
                 .count()
         };
-        assert_eq!((count(P0), count(P1)), (12, 8));
+        assert_eq!((count(P0), count(P1)), (17, 13));
+        assert_eq!(a.sorted_units().len(), 30);
+        assert_eq!(a.world.query::<&DropOff>().iter().count(), 2);
+        assert_eq!(a.world.query::<&ResourceNode>().iter().count(), 12);
+        assert_eq!((a.stock(P0), a.stock(P1)), (START_STOCK, START_STOCK));
     }
 
     #[test]

@@ -25,7 +25,6 @@ impl Selection {
         self.0.is_empty()
     }
 
-    #[cfg(test)]
     pub fn ids(&self) -> impl Iterator<Item = ObjectId> + '_ {
         self.0.iter().copied()
     }
@@ -123,6 +122,8 @@ mod tests {
             team,
             pos: Vec2::new(x, y),
             radius: 8.0,
+            worker: false,
+            carrying: false,
         }
     }
 

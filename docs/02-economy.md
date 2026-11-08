@@ -100,11 +100,11 @@ Almost everything here is **game** (`dotwars_sim`). Two candidates for Phalanx, 
 | Step | What | Needs | Status |
 |---|---|---|---|
 | E0 | Rename `UnitId` → `ObjectId` (one index for units, buildings, resources) | C2–C3 ✅ | ✅ |
-| E1 | Resource nodes + drop-off placed by `demo_scenario`; `PlayerStock`; drawn in the client; top-bar counter | E0 | ⬜ |
-| E2 | `Worker` component, `Order::Gather`, `Command::Gather`; one worker, one node: full trip and deposit | E1, C3 | ⬜ |
-| E3 | Depletion, `NodeDepleted`, retarget to the nearest node (deterministic `nearest_by`) | E2 | ⬜ |
-| E4 | Crowding: one harvester per node, wait, then retarget | E3 | ⬜ |
-| E5 | Smart right click on a node; `Deposited` → floating "+5"; carry dot | E2 | ⬜ |
+| E1 | Resource nodes + drop-off placed by `demo_scenario`; `PlayerStock`; drawn in the client; top-bar counter | E0 | ✅ |
+| E2 | `Worker` component, `Order::Gather`, `Command::Gather`; one worker, one node: full trip and deposit | E1, C3 | ✅ |
+| E3 | Depletion, `NodeDepleted`, retarget to the nearest node (deterministic `nearest_by`) | E2 | ✅ |
+| E4 | Crowding: one harvester per node, wait, then retarget | E3 | ✅ |
+| E5 | Smart right click on a node; `Deposited` → floating "+5"; carry dot | E2 | ✅ |
 | — | Return-cargo command, supply/population cap, second resource, expansions | [03](03-production.md) | ⬜ later |
 
 **Done when (E1–E5):** select 5 workers, right-click a mineral node. They spread across nearby nodes, walk back and forth, and the counter goes up by 5 per trip. Nodes shrink and disappear, and the workers move on by themselves.
@@ -241,7 +241,26 @@ See **Done when** under Steps, checked by hand in the game. All sim tests and cl
 
 ## Status
 
-**Implemented:** E0. **Next:** E1.
-- E0: `UnitId` → `ObjectId` everywhere (sim + client), `despawn_unit` → `despawn`. `sorted_objects()` returns everything in the index;
-  `sorted_units()` keeps only objects with `Orders`, so the client never sees nodes or buildings as units.
-  The checksum walks `sorted_objects()`. Behaviour unchanged: sim 10, client 16 tests pass.
+**Implemented:** E0–E5. Not verified by a human yet (see the checklist below).
+- E0: `UnitId` → `ObjectId` everywhere; `sorted_objects()` (all) vs `sorted_units()` (only objects with `Orders`).
+- E1: `ResourceNode`, `DropOff`, per-player `stocks` (`stock()`, `set_stock()`), `spawn_node/dropoff/worker`. `demo_scenario` adds a base for each player at (250, 500) and (1750, 500): drop-off, 6 nodes, 5 workers, stock 50. Constants live in `dotwars_sim::economy`. Client: `NodeView`/`DropOffView`, gold nodes that shrink, team-colored drop-off squares, `Minerals: N` top bar.
+- E2: `Worker`, `GatherState`, `Order::Gather`, `Command::Gather` (ignored for non-workers, enemy units and non-nodes). One `gather` system walks workers in `ObjectId` order. Checksum covers workers, nodes, drop-offs and stock.
+- E3: `depletion` removes empty nodes with `Event::NodeDepleted { node, pos }`; workers retarget to the nearest node within 400 units, or go idle and drop the order.
+- E4: one harvester per node; a worker that waits 10 ticks at an occupied node moves to the nearest free one. Claims by workers that left count as free.
+- E5: smart right click (`orders.rs`: workers gather, the rest walk to the node), `effects.rs` ("+5" text, depletion ring), gold dot on carrying workers, debug line with minerals, node count and the first selected worker's state.
+
+**Differences from the plan**
+- `Worker` has no `capacity` field; `CARRY` is a constant until unit data files exist.
+- `step_toward` is separate from `movement` (which stays exactly as it was, so Move behaves the same and the old tests are untouched).
+- The node search is limited to 400 units; the drop-off search has no limit.
+- Tests: sim 23 (12 new in `economy.rs`), client 23 (`orders`, `effects`).
+
+**Check by hand:**
+1. Box-select the 5 blue workers near the blue square, right-click a gold node: they walk, mine (1 s), return, and `Minerals` goes up by 5 per trip with a floating "+5".
+2. Workers carrying minerals show a gold dot; a node shrinks as it empties.
+3. Send all 5 to one node: one mines, the others wait ~0.5 s and spread to other nodes.
+4. Select workers plus a soldier and right-click a node: workers mine, the soldier walks there.
+5. S while a worker walks back: it stops with its cargo; right-click the node again and it delivers first.
+6. Debug overlay (F1) shows the first selected worker's state.
+
+**Next:** [03 – Production](03-production.md) design (buildings, construction, queue), then supply.

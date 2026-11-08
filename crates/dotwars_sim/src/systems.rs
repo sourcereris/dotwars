@@ -3,7 +3,7 @@ use hecs::World;
 use phalanx_core::Fixed;
 
 /// Placeholder speed until unit data files exist.
-const SPEED: Fixed = Fixed::from_int(4);
+pub(crate) const SPEED: Fixed = Fixed::from_int(4);
 
 pub fn store_prev_positions(world: &mut World) {
     for (_, (prev, pos)) in world.query_mut::<(&mut PrevPosition, &Position)>() {
