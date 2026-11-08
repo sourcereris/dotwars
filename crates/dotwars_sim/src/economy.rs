@@ -10,6 +10,7 @@ use crate::components::{
 use crate::{DotWars, Event, systems::SPEED};
 use hecs::Entity;
 use phalanx_core::{Fixed, FixedVec2};
+use phalanx_sim::{Cooldown, nearest_by};
 
 // Placeholders until unit/building data files exist.
 pub const NODE_AMOUNT: u32 = 1500;
@@ -25,17 +26,6 @@ const SEARCH_RADIUS_SQ: i64 = (400 * 400) << Fixed::FRAC_BITS;
 pub const NODE_RADIUS: Fixed = Fixed::from_int(12);
 pub const DROPOFF_RADIUS: Fixed = Fixed::from_int(24);
 pub const WORKER_RADIUS: Fixed = Fixed::from_int(6);
-
-/// Closest candidate to `from`. Ties go to the lower `ObjectId`, so the answer never depends on
-/// the order candidates arrive in (hecs query order is not stable).
-pub fn nearest(
-    from: FixedVec2,
-    candidates: impl Iterator<Item = (ObjectId, FixedVec2)>,
-) -> Option<ObjectId> {
-    candidates
-        .min_by_key(|(id, p)| (from.dist_sq(*p), *id))
-        .map(|(id, _)| id)
-}
 
 /// Moves up to `SPEED` toward `target` and stops once within `stop_at`. True when arrived.
 pub(crate) fn step_toward(pos: &mut FixedVec2, target: FixedVec2, stop_at: Fixed) -> bool {
@@ -109,7 +99,7 @@ impl DotWars {
             }
             Some((id, p))
         });
-        nearest(from, candidates)
+        nearest_by(from, candidates)
     }
 
     /// Nearest drop-off of `team`: id, position, radius.
@@ -127,7 +117,7 @@ impl DotWars {
             }
             Some((id, self.world.get::<&Position>(e).ok()?.0))
         });
-        let id = nearest(from, candidates)?;
+        let id = nearest_by(from, candidates)?;
         let e = self.entity(id)?;
         let p = self.world.get::<&Position>(e).ok()?.0;
         let r = self.world.get::<&Body>(e).ok()?.radius;
@@ -204,7 +194,7 @@ impl DotWars {
                         }
                         w.state = GatherState::Harvesting {
                             node,
-                            ticks_left: HARVEST_TICKS,
+                            timer: Cooldown::new(HARVEST_TICKS),
                         };
                     } else if waited + 1 >= WAIT_TICKS {
                         match self.nearest_node(pos, id, Some(node), true) {
@@ -222,12 +212,9 @@ impl DotWars {
                     }
                 }
             },
-            GatherState::Harvesting { node, ticks_left } => {
-                if ticks_left > 1 {
-                    w.state = GatherState::Harvesting {
-                        node,
-                        ticks_left: ticks_left - 1,
-                    };
+            GatherState::Harvesting { node, mut timer } => {
+                if !timer.tick() {
+                    w.state = GatherState::Harvesting { node, timer };
                 } else {
                     if let Some(ne) = self.entity(node)
                         && let Ok(mut n) = self.world.get::<&mut ResourceNode>(ne)
@@ -339,19 +326,6 @@ mod tests {
         let w = sim.spawn_worker(at(50, 0), P0);
         sim.set_stock(P0, START_STOCK);
         (Driver::new(sim, 3), w, node)
-    }
-
-    #[test]
-    fn nearest_breaks_ties_by_id_in_any_order() {
-        let c = [
-            (ObjectId(5), at(10, 0)),
-            (ObjectId(2), at(-10, 0)),
-            (ObjectId(9), at(0, 10)),
-        ];
-        let from = at(0, 0);
-        assert_eq!(nearest(from, c.iter().copied()), Some(ObjectId(2)));
-        assert_eq!(nearest(from, c.iter().rev().copied()), Some(ObjectId(2)));
-        assert_eq!(nearest(from, std::iter::empty()), None);
     }
 
     #[test]

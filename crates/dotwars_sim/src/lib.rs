@@ -395,10 +395,10 @@ fn hash_gather_state(h: &mut Checksum, s: GatherState) {
             h.u32(node.0);
             h.u32(waited as u32);
         }
-        GatherState::Harvesting { node, ticks_left } => {
+        GatherState::Harvesting { node, timer } => {
             h.u32(2);
             h.u32(node.0);
-            h.u32(ticks_left as u32);
+            h.u32(timer.remaining() as u32);
         }
         GatherState::Returning { node } => {
             h.u32(3);

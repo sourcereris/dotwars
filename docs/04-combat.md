@@ -151,7 +151,7 @@ Add `Health`, `Combat` (cooldown, target, anchor, retarget_in), `LastHit`, and t
 
 | Step | What | Needs | Status |
 |---|---|---|---|
-| K0 | **Engine:** `nearest_by` and `Cooldown` in `phalanx_sim`; economy switches to them | — (touches `dotwars_sim`: after production's current step) | ⬜ |
+| K0 | **Engine:** `nearest_by` and `Cooldown` in `phalanx_sim`; economy switches to them | — (touches `dotwars_sim`: after production's current step) | ✅ |
 | K1 | `Health` on units and buildings, `death` system, `Died`, cleanup (index, grid); client health bars and death effect | P1 | ⬜ |
 | K2 | Stats in `UnitDef`, per-unit speed, `Command::Attack`, `Order::Attack`, two-phase combat (chase, range, cooldown, hit), `Attacked`; client smart right click on an enemy + tracers | K0, K1 | ⬜ |
 | K3 | Auto-acquire: idle/Stop (leash + anchor), Hold (range only), `LastHit`, priority key, sticky retarget | K2 | ⬜ |
@@ -169,5 +169,8 @@ Rangers shoot (tracers; no kiting yet), and Brutes win against Soldiers.
 
 ## Status
 
-**Implemented:** nothing yet. The design is written. **K0 waits** until the production work in `dotwars_sim` is merged
-(it changes economy code); K1 needs P1. An implementation plan per step gets written once P1 lands.
+**Implemented:** K0. **Next:** K1 (needs P1, which is done). An implementation plan per step comes before K1 starts.
+- K0: `phalanx_sim::nearest_by(from, candidates)` (key `(dist_sq, id)`, generic over the id) and `phalanx_sim::Cooldown`
+  (`new`, `ready`, `remaining`, `start`, `tick() -> bool` true only on the tick it hits 0), each with unit tests.
+  Economy dropped its own `nearest`; `GatherState::Harvesting` holds `timer: Cooldown`. Harvest timing is unchanged
+  (the checksum hashes `timer.remaining()`).

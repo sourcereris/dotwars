@@ -1,6 +1,6 @@
 use crate::data::{BuildingKind, UnitKind};
 use phalanx_core::{Fixed, FixedVec2, PlayerId};
-use phalanx_sim::grid::Cell;
+use phalanx_sim::{Cooldown, grid::Cell};
 
 /// Stable, never-reused id for everything the sim tracks (units, buildings, resources):
 /// sort key and the way commands name objects.
@@ -89,7 +89,7 @@ pub enum GatherState {
     },
     Harvesting {
         node: ObjectId,
-        ticks_left: u16,
+        timer: Cooldown,
     },
     /// Remembers the node to go back to.
     Returning {
