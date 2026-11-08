@@ -136,7 +136,7 @@ Add `Health`, `Combat` (cooldown, target, anchor, retarget_in), `LastHit`, and t
 ### Testing (headless)
 - **Range:** a target one unit outside the range isn't hit; at exactly the range it is (edge-to-edge math).
 - **Cooldown:** damage lands exactly every `cooldown` ticks.
-- **Mutual kill:** two equal units in melee die on the same tick. **Swapping spawn order gives the same checksums** (fairness).
+- **Mutual kill:** two equal units in melee die on the same tick. **Swapping spawn order gives the same death tick** (fairness; checksums differ because the ids swap).
 - **Priority:** a unit prefers the enemy hitting it over a nearer one; prefers armed units over a worker; ties resolve by id.
 - **Hold:** never moves, shoots only in range. **Idle:** chases until the leash, then walks back to the anchor. **AttackMove:** fights, then
   reaches the target. **Move:** walks through enemies without stopping.
@@ -167,9 +167,111 @@ K1–K4 don't need training: the demo scenario's two unit blocks (12 vs 8) are a
 units die and vanish. Hold stays put, Stop chases a bit and returns, A-click walks through and fights.
 Rangers shoot (tracers; no kiting yet), and Brutes win against Soldiers.
 
+## Implementation plan (K1–K2)
+
+Written against the code after P6 + K0. Paths are under `crates/`.
+
+### Decisions (changes from or additions to the design)
+- **One spawn path.** `spawn_unit` creates a Soldier and `spawn_worker` patches it into a Worker. K1 replaces both with
+  `spawn_kind(kind, pos, owner)`, which reads `data::unit(kind)` for `Body`, `Health` and (K2) `Combat`. Workers also get
+  `Worker`. Production (`production.rs:137`) and `add_base` call it. `spawn_unit`/`spawn_worker` stay as thin test wrappers.
+- **K1 buildings get full hp, even under construction.** The 10 % → 100 % growth is K6. K1 needs nothing more than
+  `BuildingDef.hp`.
+- **`UnitDef.hp` arrives in K1, the rest of the stats in K2.** That way each step adds only fields it uses (no dead fields
+  under clippy).
+- **`Combat` in K2 is `{ cooldown, target }` only.** `anchor` and `retarget_in` come with K3, which is the first step that reads them.
+  `LastHit` is K3 too.
+- **Each unit either moves or hits on a tick, never both.** A chaser that reaches range this tick hits next tick, which
+  keeps the decide phase simple.
+- **Cooldown order:** every `Combat.cooldown.tick()` runs first, then decide. A hit calls `start(def.cooldown)`.
+  Result: hits land every `cooldown` ticks exactly (hit at t, again at t + cooldown).
+- **Buildings as targets are circles.** Their radius is the existing `Body.radius` (half the shorter side). A rectangle
+  check is "later" and not worth it in the MVP.
+- **Fairness test, corrected:** swapping spawn order swaps the ids, so the checksums *can't* match. The test asserts
+  instead that both units die on the same tick, with the same hp traces mirrored.
+- **Death needs no new cleanup code.** Construction already handles a vanished site (`site == None`). `nearest_dropoff`
+  re-searches on every trip. `supply()` counts live entities, so it drops by itself. `despawn` already frees the grid and
+  the index. K1 only proves all of this with tests.
+
+### K1 – Health, death, cleanup
+| File | Change |
+|---|---|
+| `dotwars_sim/src/data.rs` | `UnitDef.hp` (Worker 40, Soldier 70); `BuildingDef.hp` (Base 1000, Barracks 600, Depot 400) |
+| `dotwars_sim/src/components.rs` | `Health { hp: u32, max: u32 }` |
+| `dotwars_sim/src/lib.rs` | `spawn_kind`; `Health` in `spawn_kind` and `spawn_building`; `Event::Died { id, owner, pos, building }`; `run_death` last in `tick`; checksum hashes `hp, max` |
+| `dotwars_sim/src/combat.rs` (new) | `run_death`: walk `sorted_objects()` with `Health.hp == 0`, emit `Died`, then `despawn`. `#[cfg(test)] fn hurt(id, n)` so tests can hurt things before K2 exists |
+| `dotwars_sim/src/combat_tests.rs` (new) | tests below |
+| `dotwars_client/src/view.rs` | `hp: (u32, u32)` in `UnitView` and `BuildingView` |
+| `dotwars_client/src/main.rs` (draw) | health bar above units and buildings when damaged or selected; green above 60 %, yellow above 30 %, red otherwise |
+| `dotwars_client/src/effects.rs` | `Died` → a fading circle (unit) or square (building) at `pos` for 0.5 s |
+| selection / groups | check that dead ids drop out of the selection and the control groups (they may already be filtered through the views; add a test if they aren't) |
+
+**Tests (sim):**
+- At hp 0, the object is gone from the index after the same tick, and exactly one `Died` event comes out, with the right owner and `building` flag.
+- Several deaths in one tick: the `Died` events are in `ObjectId` order.
+- A dead building's cells are free, and `can_place` passes there again.
+- A dead Barracks drops its queue with no refund, and `supply()` drops too.
+- A dead drop-off: a carrying worker goes to the next nearest one, or waits if none is left.
+- A dead site under construction: its builder goes idle.
+- A dead worker's node claim: another worker can claim it.
+- A unit killed while it's in a selection command is skipped (as `dead_unit_in_command_is_skipped` does today).
+- `Health` changes the checksum.
+
+**Tests (client):** the health-bar color thresholds, the bar hidden at full hp unless selected, and the `Died` effect expiring.
+
+**Done when:** in the game, nothing changes yet unless a test hurts something. The bars and the death effect are in place, so K2
+lights them up.
+
+### K2 – Attack
+| File | Change |
+|---|---|
+| `dotwars_sim/src/data.rs` | `Tag { Light, Medium, Heavy, Structure }`; `UnitDef` gets `damage, range: Fixed, cooldown: u16, speed: Fixed, tag, bonus: Option<(Tag, u32)>`; `pub const MELEE: Fixed = 4`. Worker 4 dmg / cd 20, Soldier 8 (+8 vs Light) / cd 16, both at speed 4 and melee range |
+| `dotwars_sim/src/economy.rs` | `step_toward(pos, target, stop_at, speed)`. Callers (gather, build, construct) pass `data::unit(kind).speed` |
+| `dotwars_sim/src/systems.rs` | `movement` queries `&UnitKind` for speed. The `SPEED` constant goes away |
+| `dotwars_sim/src/components.rs` | `Combat { cooldown: Cooldown, target: Option<ObjectId> }`; `Order::Attack(ObjectId)` |
+| `dotwars_sim/src/lib.rs` | `Command::Attack { units, target, queue }`. `apply` ignores it if the target is missing or on the same team, and gives the order only to own units with `Combat`. `hash_order` gets a new tag; the checksum hashes `Combat`. `Event::Attacked { attacker, target, ranged }`. `run_combat` goes before `run_death` |
+| `dotwars_sim/src/combat.rs` | `run_combat` (below) and `fn damage(att: &UnitDef, target_tag) -> u32` |
+
+`run_combat`, one tick:
+1. **Tick cooldowns** for every `Combat`.
+2. **Snapshot:** a `BTreeMap<ObjectId, Snap { pos, radius, team, tag }>` of everything with `Health`.
+3. **Decide** (`sorted_units()` with `Order::Attack(t)`), into a `Vec<(ObjectId, Intent)>`:
+   - `t` is not in the snapshot → `Intent::Done`.
+   - In range (`dist_sq <= (range + r_a + r_t)²`, in `i64`) and the cooldown is ready → `Intent::Hit(t, dmg)`.
+   - In range, cooldown not ready → `Intent::Wait`.
+   - Out of range → `Intent::Chase(t's pos)`.
+4. **Apply**, in this order:
+   - Every `Chase` does `step_toward(pos, target, range + r_a + r_t, speed)`.
+   - Every `Done` sets `orders.current = None`, so `advance_orders` takes the next order next tick.
+   - Every `Hit` does `hp = hp.saturating_sub(dmg)`, then `cooldown.start(def.cooldown)`, `combat.target = Some(t)`, and emits
+     `Attacked { ranged: def.range > MELEE }`.
+
+Then `run_death` removes the dead. Their attackers see `Done` on the next tick.
+
+| File (client) | Change |
+|---|---|
+| `dotwars_client/src/orders.rs` | `pick_enemy(units, buildings, pos, tolerance)`: an enemy unit by radius + tolerance, or else an enemy building by `contains`. `right_click_commands` checks it **first**: on a hit, all selected own units get `Command::Attack` (workers too) |
+| `dotwars_client/src/effects.rs` | `Attacked`: ranged → a 0.1 s line from attacker to target; melee → a 0.15 s white flash ring on the target. Positions come from the current views, and the effect is skipped if either id is gone |
+
+**Tests (sim):**
+- **Range:** a target 1 unit past `range + r_a + r_t` takes no damage; at exactly that distance it does.
+- **Cooldown:** hp drops every 16 ticks for a Soldier, and nothing lands in between.
+- **Chase:** an Attack on a far target walks there and hits. If the target moves, the attacker follows.
+- **Mutual kill:** two Soldiers die on the same tick. With spawn order swapped, both still die on that same tick.
+- **Bonus:** a Soldier hits a Worker for 16 and a Soldier for 8.
+- **Ignored:** an Attack on an own unit or a missing id changes nothing (equal checksums with and without the command).
+- **Target dies:** the attacker is idle on the next tick. A queued `Move` after the `Attack` starts then.
+- **Speed:** all units are at speed 4, so existing movement and economy tests keep their checksums.
+- **Determinism:** a 10v10 Attack brawl over 400 ticks, run twice, gives equal checksums.
+
+**Tests (client):** a right click on an enemy unit or building → `Attack` for everyone selected; a right click on an own unit → `Move`; tracers expire.
+
+**Done when:** select the blue soldiers and right-click a red one. They walk over, hit, the health bars drop, and the target dies
+and vanishes. A right click on a red building wears it down until it dies and frees its cells.
+
 ## Status
 
-**Implemented:** K0. **Next:** K1 (needs P1, which is done). An implementation plan per step comes before K1 starts.
+**Implemented:** K0. **Next:** K1 (needs P1, which is done). The implementation plan for K1–K2 is above; K3–K6 get one when K2 lands.
 - K0: `phalanx_sim::nearest_by(from, candidates)` (key `(dist_sq, id)`, generic over the id) and `phalanx_sim::Cooldown`
   (`new`, `ready`, `remaining`, `start`, `tick() -> bool` true only on the tick it hits 0), each with unit tests.
   Economy dropped its own `nearest`; `GatherState::Harvesting` holds `timer: Cooldown`. Harvest timing is unchanged
