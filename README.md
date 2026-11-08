@@ -23,3 +23,5 @@ Right click moves the unit.
 |---|---|
 | `dotwars_sim` | game rules, headless (hecs); determinism test |
 | `dotwars_client` | the game binary (macroquad) |
+
+See [GAME_DESIGN.md](GAME_DESIGN.md) for the genre foundation, MVP scope and the (open) "soul" of the game.
