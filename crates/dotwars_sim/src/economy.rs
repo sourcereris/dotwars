@@ -38,7 +38,7 @@ pub fn nearest(
 }
 
 /// Moves up to `SPEED` toward `target` and stops once within `stop_at`. True when arrived.
-fn step_toward(pos: &mut FixedVec2, target: FixedVec2, stop_at: Fixed) -> bool {
+pub(crate) fn step_toward(pos: &mut FixedVec2, target: FixedVec2, stop_at: Fixed) -> bool {
     let d = target - *pos;
     let len = d.length();
     if len <= stop_at {

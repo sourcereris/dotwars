@@ -14,7 +14,7 @@ Status legend: ✅ done · 🚧 in progress · ⬜ planned · 📝 design not wr
 |---|---|---|---|
 | 01 | [Control](01-control.md) | ✅ written | 🚧 C0–C3, C5 done; next C4, C6, C7 |
 | 02 | [Economy](02-economy.md) | ✅ written + implementation plan | ✅ E0–E5 (needs a human check) |
-| 03 | [Production](03-production.md) | 📝 | ⬜ |
+| 03 | [Production](03-production.md) | ✅ written | ✅ P0–P6 (needs a human check) |
 | 04 | [Combat](04-combat.md) | 📝 | ⬜ |
 | 05 | [Map and information](05-map.md) | 📝 | ⬜ |
 | 06 | [Interface](06-interface.md) | 📝 | ⬜ |

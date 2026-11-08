@@ -1,4 +1,6 @@
+use crate::data::{BuildingKind, UnitKind};
 use phalanx_core::{Fixed, FixedVec2, PlayerId};
+use phalanx_sim::grid::Cell;
 
 /// Stable, never-reused id for everything the sim tracks (units, buildings, resources):
 /// sort key and the way commands name objects.
@@ -29,6 +31,13 @@ pub enum Order {
     Hold,
     /// Harvest the resource node and bring the cargo to the nearest own drop-off, repeatedly.
     Gather(ObjectId),
+    /// Walk to the site, then place the building if it is still allowed and affordable.
+    Build {
+        kind: BuildingKind,
+        cell: Cell,
+    },
+    /// Work on an unfinished own building until it is done.
+    Construct(ObjectId),
 }
 
 /// Current order plus a queue of following ones. `current == None` means idle.
@@ -109,4 +118,28 @@ pub struct Worker {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PlayerStock {
     pub minerals: u32,
+}
+
+/// A building. `cell` is the top-left cell of its footprint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Building {
+    pub kind: BuildingKind,
+    pub cell: Cell,
+}
+
+/// Present on a building until a worker has finished it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Construction {
+    pub done: u16,
+    pub total: u16,
+}
+
+/// Training queue of a finished building. Cost and supply are paid when an item is queued.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Producer {
+    pub queue: Vec<UnitKind>,
+    /// Ticks spent on the front item.
+    pub progress: u16,
+    /// Where new units walk to. `None`: they stay where they spawn.
+    pub rally: Option<FixedVec2>,
 }

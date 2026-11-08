@@ -1,5 +1,6 @@
 //! Dot Wars actions and their default keys. The engine knows keys; this file knows what they mean.
 
+use dotwars_sim::data::BuildingKind;
 use phalanx_client::phalanx_input::{Bindings, Chord, InputState, Key};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11,6 +12,12 @@ pub enum Action {
     PanDown,
     PanLeft,
     PanRight,
+    /// Start placing a building (needs an own worker selected).
+    Build(BuildingKind),
+    /// Queue the first unit the selected buildings can train.
+    Train,
+    /// Leave build mode.
+    CancelMode,
     /// `N`: select group N (double tap also centers the camera).
     GroupSelect(u8),
     /// `Ctrl+N`: assign the selection to group N.
@@ -37,6 +44,11 @@ pub fn default_bindings() -> Bindings<Action> {
     b.bind(Key::F1, Action::ToggleDebug)
         .bind(Key::S, Action::Stop)
         .bind(Key::H, Action::Hold)
+        .bind(Key::B, Action::Build(BuildingKind::Barracks))
+        .bind(Key::V, Action::Build(BuildingKind::SupplyDepot))
+        .bind(Key::N, Action::Build(BuildingKind::Base))
+        .bind(Key::Q, Action::Train)
+        .bind(Key::Escape, Action::CancelMode)
         // Arrows only: WASD would collide with S = Stop.
         .bind(Key::Up, Action::PanUp)
         .bind(Key::Down, Action::PanDown)

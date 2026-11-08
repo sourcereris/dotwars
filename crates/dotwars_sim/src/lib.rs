@@ -2,17 +2,24 @@
 #![deny(clippy::disallowed_types, clippy::disallowed_methods)]
 
 pub mod components;
+pub mod data;
 pub mod economy;
+pub mod production;
+#[cfg(test)]
+mod production_tests;
 mod systems;
 
 use components::{
-    Body, DropOff, GatherState, ObjectId, Order, Orders, PlayerStock, Position, PrevPosition,
-    ResourceNode, Team, Worker,
+    Body, Building, Construction, DropOff, GatherState, ObjectId, Order, Orders, PlayerStock,
+    Position, PrevPosition, Producer, ResourceNode, Team, Worker,
 };
+use data::{BuildingKind, UnitKind};
 use economy::{DROPOFF_RADIUS, NODE_AMOUNT, NODE_RADIUS, START_STOCK, WORKER_RADIUS};
 use hecs::{Entity, World};
 use phalanx_core::{Checksum, Fixed, FixedVec2, IdGen, PlayerId, Rng};
 use phalanx_sim::Simulation;
+use phalanx_sim::grid::{Cell, Grid};
+pub use production::{BuildError, TrainError};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,6 +43,33 @@ pub enum Command {
         node: ObjectId,
         queue: bool,
     },
+    /// One worker walks to the site and places the building if it is still allowed on arrival.
+    Build {
+        worker: ObjectId,
+        kind: BuildingKind,
+        cell: Cell,
+        queue: bool,
+    },
+    /// Workers resume an unfinished own building.
+    Construct {
+        units: Vec<ObjectId>,
+        building: ObjectId,
+        queue: bool,
+    },
+    /// Queue a unit in an own, finished building. Pays now.
+    Train {
+        building: ObjectId,
+        kind: UnitKind,
+    },
+    /// Remove a queue item and refund it in full.
+    CancelTrain {
+        building: ObjectId,
+        slot: usize,
+    },
+    SetRally {
+        buildings: Vec<ObjectId>,
+        target: FixedVec2,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,10 +81,31 @@ pub enum Event {
         amount: u32,
     },
     /// The node ran dry and is already gone, hence the position.
-    NodeDepleted { node: ObjectId, pos: FixedVec2 },
+    NodeDepleted {
+        node: ObjectId,
+        pos: FixedVec2,
+    },
+    BuildFailed {
+        player: PlayerId,
+        reason: BuildError,
+    },
+    BuildingFinished {
+        id: ObjectId,
+    },
+    TrainFailed {
+        player: PlayerId,
+        reason: TrainError,
+    },
+    UnitTrained {
+        id: ObjectId,
+        building: ObjectId,
+    },
 }
 
 pub const UNIT_RADIUS: Fixed = Fixed::from_int(8);
+/// World units per grid cell, and the map in cells (2048 x 1536 units).
+pub const CELL_SIZE: Fixed = Fixed::from_int(32);
+pub const MAP_CELLS: (u16, u16) = (64, 48);
 
 pub struct DotWars {
     pub world: World,
@@ -60,6 +115,8 @@ pub struct DotWars {
     index: BTreeMap<ObjectId, Entity>,
     /// Per-player stockpile. Not a component: it belongs to the player, not to an entity.
     stocks: BTreeMap<PlayerId, PlayerStock>,
+    /// Who occupies each cell: buildings (whole footprint) and resource nodes (one cell).
+    grid: Grid<Option<ObjectId>>,
 }
 
 impl DotWars {
@@ -70,33 +127,27 @@ impl DotWars {
             ids: IdGen::default(),
             index: BTreeMap::new(),
             stocks: BTreeMap::new(),
+            grid: Grid::new(MAP_CELLS.0, MAP_CELLS.1, CELL_SIZE, None),
         }
     }
 
-    /// Deterministic start: a block of own units on the left, a smaller enemy block on the right.
+    /// Deterministic start: one base per player at the left and right of the map, each with
+    /// workers, a mineral field and two soldiers.
     pub fn demo_scenario(seed: u64) -> Self {
         let mut sim = Self::new(seed);
-        for row in 0..3 {
-            for col in 0..4 {
-                let pos = FixedVec2::from_ints(100 + col * 30, 200 + row * 30);
-                sim.spawn_unit(pos, PlayerId(0));
-            }
-        }
-        for row in 0..4 {
-            for col in 0..2 {
-                let pos = FixedVec2::from_ints(600 + col * 30, 180 + row * 30);
-                sim.spawn_unit(pos, PlayerId(1));
-            }
-        }
-        sim.add_base(PlayerId(0), 250, 1);
-        sim.add_base(PlayerId(1), 1750, -1);
+        sim.add_base(PlayerId(0), Cell::new(7, 14), 1);
+        sim.add_base(PlayerId(1), Cell::new(55, 14), -1);
         sim
     }
 
-    /// A drop-off, a field of nodes on the side facing the middle (`dir` = 1 right, -1 left),
-    /// five workers and the starting stock.
-    fn add_base(&mut self, owner: PlayerId, x: i32, dir: i32) {
-        self.spawn_dropoff(FixedVec2::from_ints(x, 500), owner);
+    /// A finished Base at `cell`, a field of nodes on the side facing the middle (`dir` = 1 right,
+    /// -1 left), five workers, two soldiers and the starting stock.
+    fn add_base(&mut self, owner: PlayerId, cell: Cell, dir: i32) {
+        let id = self.spawn_building(BuildingKind::Base, cell, owner, true);
+        let c = self
+            .entity(id)
+            .and_then(|e| self.world.get::<&Position>(e).ok().map(|p| p.0));
+        let (cx, cy) = c.map_or((0, 0), |p| (p.x.floor_int(), p.y.floor_int()));
         for (dx, dy) in [
             (170, -90),
             (190, -30),
@@ -105,10 +156,13 @@ impl DotWars {
             (140, 140),
             (140, -140),
         ] {
-            self.spawn_node(FixedVec2::from_ints(x + dx * dir, 500 + dy), NODE_AMOUNT);
+            self.spawn_node(FixedVec2::from_ints(cx + dx * dir, cy + dy), NODE_AMOUNT);
         }
         for i in 0..5 {
-            self.spawn_worker(FixedVec2::from_ints(x - 40 + i * 20, 550), owner);
+            self.spawn_worker(FixedVec2::from_ints(cx - 40 + i * 20, cy + 70), owner);
+        }
+        for i in 0..2 {
+            self.spawn_unit(FixedVec2::from_ints(cx - 20 + i * 40, cy - 80), owner);
         }
         self.set_stock(owner, START_STOCK);
     }
@@ -124,6 +178,7 @@ impl DotWars {
                 radius: UNIT_RADIUS,
             },
             Orders::default(),
+            UnitKind::Soldier,
         ));
         self.index.insert(id, e);
         id
@@ -136,6 +191,7 @@ impl DotWars {
             e,
             (
                 Worker::default(),
+                UnitKind::Worker,
                 Body {
                     radius: WORKER_RADIUS,
                 },
@@ -158,6 +214,9 @@ impl DotWars {
             },
         ));
         self.index.insert(id, e);
+        if let Some(c) = self.grid.cell_at(pos) {
+            self.grid.set(c, Some(id));
+        }
         id
     }
 
@@ -187,8 +246,27 @@ impl DotWars {
 
     pub fn despawn(&mut self, id: ObjectId) {
         if let Some(e) = self.index.remove(&id) {
+            self.free_cells(id, e);
             let _ = self.world.despawn(e);
         }
+    }
+
+    /// Gives back the grid cells `id` occupies.
+    fn free_cells(&mut self, id: ObjectId, e: Entity) {
+        if let Ok(b) = self.world.get::<&Building>(e) {
+            let (w, h) = data::building(b.kind).size;
+            self.grid.fill_rect(b.cell, w, h, None);
+        } else if self.world.satisfies::<&ResourceNode>(e).unwrap_or(false)
+            && let Ok(p) = self.world.get::<&Position>(e)
+            && let Some(c) = self.grid.cell_at(p.0)
+            && self.grid.get(c) == Some(Some(id))
+        {
+            self.grid.set(c, None);
+        }
+    }
+
+    pub fn grid(&self) -> &Grid<Option<ObjectId>> {
+        &self.grid
     }
 
     pub fn entity(&self, id: ObjectId) -> Option<Entity> {
@@ -226,7 +304,7 @@ impl DotWars {
         }
     }
 
-    fn apply(&mut self, player: PlayerId, cmd: &Command) {
+    fn apply(&mut self, player: PlayerId, cmd: &Command, events: &mut Vec<Event>) {
         match cmd {
             Command::Move {
                 units,
@@ -239,18 +317,40 @@ impl DotWars {
                     .entity(*node)
                     .is_some_and(|e| self.world.satisfies::<&ResourceNode>(e).unwrap_or(false));
                 if is_node {
-                    let workers: Vec<ObjectId> = units
-                        .iter()
-                        .copied()
-                        .filter(|id| {
-                            self.entity(*id).is_some_and(|e| {
-                                self.world.satisfies::<&Worker>(e).unwrap_or(false)
-                            })
-                        })
-                        .collect();
+                    let workers = self.only_workers(units);
                     self.give_orders(player, &workers, Order::Gather(*node), *queue);
                 }
             }
+            Command::Build {
+                worker,
+                kind,
+                cell,
+                queue,
+            } => {
+                let workers = self.only_workers(&[*worker]);
+                let order = Order::Build {
+                    kind: *kind,
+                    cell: *cell,
+                };
+                self.give_orders(player, &workers, order, *queue);
+            }
+            Command::Construct {
+                units,
+                building,
+                queue,
+            } => {
+                let unfinished = self.entity(*building).is_some_and(|e| {
+                    self.world.get::<&Team>(e).is_ok_and(|t| t.0 == player)
+                        && self.world.satisfies::<&Construction>(e).unwrap_or(false)
+                });
+                if unfinished {
+                    let workers = self.only_workers(units);
+                    self.give_orders(player, &workers, Order::Construct(*building), *queue);
+                }
+            }
+            Command::Train { building, kind } => self.train(player, *building, *kind, events),
+            Command::CancelTrain { building, slot } => self.cancel_train(player, *building, *slot),
+            Command::SetRally { buildings, target } => self.set_rally(player, buildings, *target),
             Command::Stop { units } => {
                 for e in self.owned_targets(player, units) {
                     if let Ok(mut o) = self.world.get::<&mut Orders>(e) {
@@ -273,6 +373,16 @@ fn hash_order(h: &mut Checksum, o: &Order) {
         Order::Gather(n) => {
             h.u32(3);
             h.u32(n.0);
+        }
+        Order::Build { kind, cell } => {
+            h.u32(4);
+            h.u32(*kind as u32);
+            h.u32(cell.x as u32);
+            h.u32(cell.y as u32);
+        }
+        Order::Construct(b) => {
+            h.u32(5);
+            h.u32(b.0);
         }
     }
 }
@@ -305,12 +415,15 @@ impl Simulation for DotWars {
         // Fixed system order.
         systems::store_prev_positions(&mut self.world);
         for (player, cmd) in commands {
-            self.apply(*player, cmd);
+            self.apply(*player, cmd, events);
         }
         systems::advance_orders(&mut self.world);
         systems::movement(&mut self.world);
         self.run_gather(events);
         self.run_depletion(events);
+        self.run_build(events);
+        self.run_construct(events);
+        self.run_produce(events);
     }
 
     fn checksum(&self) -> u64 {
@@ -351,6 +464,35 @@ impl Simulation for DotWars {
             if self.world.satisfies::<&DropOff>(e).unwrap_or(false) {
                 h.u32(0xD0);
             }
+            if let Ok(k) = self.world.get::<&UnitKind>(e) {
+                h.u32(*k as u32);
+            }
+            if let Ok(b) = self.world.get::<&Building>(e) {
+                h.u32(b.kind as u32);
+                h.u32(b.cell.x as u32);
+                h.u32(b.cell.y as u32);
+            }
+            if let Ok(c) = self.world.get::<&Construction>(e) {
+                h.u32(c.done as u32);
+                h.u32(c.total as u32);
+            }
+            if let Ok(p) = self.world.get::<&Producer>(e) {
+                h.u32(p.queue.len() as u32);
+                for k in &p.queue {
+                    h.u32(*k as u32);
+                }
+                h.u32(p.progress as u32);
+                match p.rally {
+                    Some(r) => {
+                        h.i32(r.x.raw());
+                        h.i32(r.y.raw());
+                    }
+                    None => h.u32(u32::MAX),
+                }
+            }
+        }
+        for cell in self.grid.as_slice() {
+            h.u32(cell.map_or(u32::MAX, |i| i.0));
         }
         for (p, s) in &self.stocks {
             h.u32(p.0 as u32);
@@ -421,7 +563,7 @@ mod tests {
         let a = DotWars::demo_scenario(1);
         let b = DotWars::demo_scenario(1);
         assert_eq!(a.checksum(), b.checksum());
-        // Units (with Orders): 12 + 5 workers vs 8 + 5 workers. Buildings are not units.
+        // Units (with Orders): 2 soldiers + 5 workers each. Buildings are not units.
         let count = |p| {
             a.world
                 .query::<(&Team, &Orders)>()
@@ -429,8 +571,8 @@ mod tests {
                 .filter(|(_, (t, _))| t.0 == p)
                 .count()
         };
-        assert_eq!((count(P0), count(P1)), (17, 13));
-        assert_eq!(a.sorted_units().len(), 30);
+        assert_eq!((count(P0), count(P1)), (7, 7));
+        assert_eq!(a.sorted_units().len(), 14);
         assert_eq!(a.world.query::<&DropOff>().iter().count(), 2);
         assert_eq!(a.world.query::<&ResourceNode>().iter().count(), 12);
         assert_eq!((a.stock(P0), a.stock(P1)), (START_STOCK, START_STOCK));

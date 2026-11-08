@@ -186,12 +186,12 @@ Hash `Building` (kind, cell), `Construction`, `Producer` (queue + progress), `Ra
 | Step | What | Needs | Status |
 |---|---|---|---|
 | P0 | **Engine:** `phalanx_sim::grid` (`Grid<T>`, `Cell`) + tests | — | ✅ |
-| P1 | `UnitKind`, `BuildingKind`, `data.rs`. `Building` entity; the scenario's drop-off becomes a finished **Base**; `sim.grid` with bases and nodes; map 2048×1536; buildings drawn | P0, E1 | ⬜ |
-| P2 | `Command::Build`/`Construct`, `Order::Build`/`Construct`, `can_place`, pay on arrival, `Construction`, `BuildFailed`, `BuildingFinished` | P1, E2 | ⬜ |
-| P3 | Client build mode: keys, ghost (green/red), place, Shift keeps mode, failure text, construction bar | P2 | ⬜ |
-| P4 | Supply: cap from finished buildings, used + queued, top bar | P1 | ⬜ |
-| P5 | `Producer`, `Train`/`CancelTrain`/`SetRally`, spawn at the edge facing the rally point, `UnitTrained`, `TrainFailed` | P2, P4 | ⬜ |
-| P6 | Client: select a building, `Q` to train, right click rally, queue text, smart right click on an unfinished building → `Construct` | P5, E5 | ⬜ |
+| P1 | `UnitKind`, `BuildingKind`, `data.rs`. `Building` entity; the scenario's drop-off becomes a finished **Base**; `sim.grid` with bases and nodes; map 2048×1536; buildings drawn | P0, E1 | ✅ |
+| P2 | `Command::Build`/`Construct`, `Order::Build`/`Construct`, `can_place`, pay on arrival, `Construction`, `BuildFailed`, `BuildingFinished` | P1, E2 | ✅ |
+| P3 | Client build mode: keys, ghost (green/red), place, Shift keeps mode, failure text, construction bar | P2 | ✅ |
+| P4 | Supply: cap from finished buildings, used + queued, top bar | P1 | ✅ |
+| P5 | `Producer`, `Train`/`CancelTrain`/`SetRally`, spawn at the edge facing the rally point, `UnitTrained`, `TrainFailed` | P2, P4 | ✅ |
+| P6 | Client: select a building, `Q` to train, right click rally, queue text, smart right click on an unfinished building → `Construct` | P5, E5 | ✅ |
 | — | Tech requirements (Barracks needs a depot), upgrades, defs in `ron`, cancel construction (75 % refund), several builders, buildings destroyed (with [04](04-combat.md)) | P6 | ⬜ later |
 
 **Done when (P0–P6):** with 50 start minerals and 5 workers gathering, build a supply depot and a barracks, train 5
@@ -200,11 +200,12 @@ reason. The supply counter blocks training at the cap.
 
 ## Status
 
-**Implemented:** P0. **Next:** P1 (waits for E1).
+**Implemented:** P0–P6 (needs a human check in the client: B/V/N, ghost, Q, rally). **Next:** [04 Combat](04-combat.md).
+- P1–P6 (sim): `data.rs` (kinds + defs), `production.rs` (`can_place`, `supply`, build/construct/produce systems, train/cancel/rally), 12 tests in `production_tests.rs`. Client: build mode with ghost, building selection, `Q` train, right-click rally / construct, queue text, supply in the top bar, failure banner.
+- Differences from the design: rally lives in `Producer` (no separate `Rally` component); the demo scenario has 2 soldiers per player instead of 12/8 (supply cap 10); `spawn_dropoff` stays as a test helper.
+- "Done when": one depot (+8) lets a base fit 4 soldiers; the 5th needs a second depot.
 - P0: `phalanx_sim::grid` — `Cell`, `Grid<T>` with `get`/`set` (bounds-checked), `cell_at` (floor on raw fixed-point,
   negatives → `None`), `cell_origin`, `rect_center` (footprint center), `rect` (row-order cells, `None` if it leaves the grid
   or is empty, overflow-safe), `rect_all(pred)`, `fill_rect` (all or nothing), `as_slice` (checksum). 7 tests.
 - Difference from the design: `set` returns `bool` instead of silently ignoring out-of-bounds; `rect_center`, `rect_all`,
   `fill_rect` added because `can_place` and placement need exactly those.
-The implementation plan (exact files and signatures per step) gets written once E1–E2 have landed, so it matches the
-real economy code.

@@ -1,6 +1,6 @@
 //! Selection: client-only state, never in the sim. Pure functions, no window needed.
 
-use crate::view::UnitView;
+use crate::view::{BuildingView, UnitView};
 use dotwars_sim::components::ObjectId;
 use macroquad::prelude::Vec2;
 use phalanx_client::{Camera, phalanx_input::Rect};
@@ -74,6 +74,17 @@ impl Selection {
             .iter()
             .filter(|v| v.team == local && self.0.contains(&v.id))
             .map(|v| v.id)
+            .collect()
+    }
+}
+
+impl Selection {
+    /// Selected buildings that belong to `local`.
+    pub fn owned_buildings(&self, buildings: &[BuildingView], local: PlayerId) -> Vec<ObjectId> {
+        buildings
+            .iter()
+            .filter(|b| b.team == local && self.0.contains(&b.id))
+            .map(|b| b.id)
             .collect()
     }
 }
