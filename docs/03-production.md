@@ -185,7 +185,7 @@ Hash `Building` (kind, cell), `Construction`, `Producer` (queue + progress), `Ra
 
 | Step | What | Needs | Status |
 |---|---|---|---|
-| P0 | **Engine:** `phalanx_sim::grid` (`Grid<T>`, `Cell`) + tests | — (can start now, in parallel with economy) | ⬜ |
+| P0 | **Engine:** `phalanx_sim::grid` (`Grid<T>`, `Cell`) + tests | — | ✅ |
 | P1 | `UnitKind`, `BuildingKind`, `data.rs`. `Building` entity; the scenario's drop-off becomes a finished **Base**; `sim.grid` with bases and nodes; map 2048×1536; buildings drawn | P0, E1 | ⬜ |
 | P2 | `Command::Build`/`Construct`, `Order::Build`/`Construct`, `can_place`, pay on arrival, `Construction`, `BuildFailed`, `BuildingFinished` | P1, E2 | ⬜ |
 | P3 | Client build mode: keys, ghost (green/red), place, Shift keeps mode, failure text, construction bar | P2 | ⬜ |
@@ -200,6 +200,11 @@ reason. The supply counter blocks training at the cap.
 
 ## Status
 
-**Implemented:** nothing yet. The design is written. **P0 (engine grid) can start now**; P1 waits for E1.
+**Implemented:** P0. **Next:** P1 (waits for E1).
+- P0: `phalanx_sim::grid` — `Cell`, `Grid<T>` with `get`/`set` (bounds-checked), `cell_at` (floor on raw fixed-point,
+  negatives → `None`), `cell_origin`, `rect_center` (footprint center), `rect` (row-order cells, `None` if it leaves the grid
+  or is empty, overflow-safe), `rect_all(pred)`, `fill_rect` (all or nothing), `as_slice` (checksum). 7 tests.
+- Difference from the design: `set` returns `bool` instead of silently ignoring out-of-bounds; `rect_center`, `rect_all`,
+  `fill_rect` added because `can_place` and placement need exactly those.
 The implementation plan (exact files and signatures per step) gets written once E1–E2 have landed, so it matches the
 real economy code.
