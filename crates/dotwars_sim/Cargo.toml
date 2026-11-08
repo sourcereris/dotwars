@@ -1,0 +1,12 @@
+[package]
+name = "dotwars_sim"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+phalanx_core.workspace = true
+phalanx_sim.workspace = true
+hecs.workspace = true
+
+[lints]
+workspace = true

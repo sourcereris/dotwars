@@ -1,0 +1,14 @@
+[package]
+name = "dotwars_client"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+phalanx_core.workspace = true
+phalanx_sim.workspace = true
+phalanx_client.workspace = true
+dotwars_sim.workspace = true
+macroquad.workspace = true
+
+[lints]
+workspace = true

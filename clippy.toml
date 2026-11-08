@@ -1,0 +1,10 @@
+# Determinism guards. Sim crates turn these into errors with
+# #![deny(clippy::disallowed_types, clippy::disallowed_methods)].
+disallowed-types = [
+  { path = "std::collections::HashMap", reason = "random iteration order breaks lockstep; use BTreeMap or Vec" },
+  { path = "std::collections::HashSet", reason = "random iteration order breaks lockstep; use BTreeSet or Vec" },
+]
+disallowed-methods = [
+  { path = "std::time::Instant::now", reason = "no wall-clock time in the sim" },
+  { path = "std::time::SystemTime::now", reason = "no wall-clock time in the sim" },
+]
