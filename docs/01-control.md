@@ -15,7 +15,7 @@ raw input ──► InputState ──► Bindings ──► Controller ──►
 
 **Key rule:** selection and control groups are **client-only state**. They are not in the sim,
 not sent over the network and need not be deterministic. The sim only gets the final Command
-with a list of `UnitId`s.
+with a list of `ObjectId`s.
 
 ### Selection (client)
 - **Click:** nearest own-or-visible unit within a radius of the mouse, compared in world space
@@ -39,11 +39,11 @@ The client decides what a right click means; the sim gets an explicit command an
 ### Commands (sim)
 ```rust
 enum Command {
-    Move       { units: Vec<UnitId>, target: FixedVec2, queue: bool },
-    AttackMove { units: Vec<UnitId>, target: FixedVec2, queue: bool },
-    Attack     { units: Vec<UnitId>, target: UnitId,    queue: bool },
-    Stop       { units: Vec<UnitId> },
-    Hold       { units: Vec<UnitId> },
+    Move       { units: Vec<ObjectId>, target: FixedVec2, queue: bool },
+    AttackMove { units: Vec<ObjectId>, target: FixedVec2, queue: bool },
+    Attack     { units: Vec<ObjectId>, target: ObjectId,    queue: bool },
+    Stop       { units: Vec<ObjectId> },
+    Hold       { units: Vec<ObjectId> },
 }
 ```
 - **Ownership check:** the sim ignores units that don't belong to the issuing player (guards against bugs and cheats). Needs a `Team` component.
@@ -53,7 +53,7 @@ enum Command {
 `Orders` component = current order + queue (`Vec<Order>`), replacing today's `MoveTarget`.
 - `queue: false` clears the queue and replaces the current order; `queue: true` appends.
 - Systems read only the current order; when it completes, the next one starts.
-- `Order::{Move(pos), AttackMove(pos), Attack(UnitId), Hold}`. No order = idle.
+- `Order::{Move(pos), AttackMove(pos), Attack(ObjectId), Hold}`. No order = idle.
 
 ### Group movement (sim, deterministic)
 20 units sent to one point would fight over one pixel. MVP: keep the group's shape.
@@ -61,7 +61,7 @@ Each unit targets `target + (own_pos − group_center)`, with the offset clamped
 Computed in the sim from the command, so commands stay small. Proper formations: later.
 
 ### Control groups (client)
-`[Vec<UnitId>; 10]`. Ctrl+N assigns, N selects, double-tap N centers the camera. Dead units pruned.
+`[Vec<ObjectId>; 10]`. Ctrl+N assigns, N selects, double-tap N centers the camera. Dead units pruned.
 
 ### Feedback (client)
 On click, show a marker **immediately** (green = move, red = attack), sound later. Hides the

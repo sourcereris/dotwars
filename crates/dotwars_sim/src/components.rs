@@ -1,8 +1,9 @@
 use phalanx_core::{Fixed, FixedVec2, PlayerId};
 
-/// Stable, never-reused unit id: sort key and the way commands name units.
+/// Stable, never-reused id for everything the sim tracks (units, buildings, resources):
+/// sort key and the way commands name objects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct UnitId(pub u32);
+pub struct ObjectId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Position(pub FixedVec2);

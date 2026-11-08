@@ -4,7 +4,7 @@
 pub mod components;
 mod systems;
 
-use components::{Body, Order, Orders, Position, PrevPosition, Team, UnitId};
+use components::{Body, ObjectId, Order, Orders, Position, PrevPosition, Team};
 use hecs::{Entity, World};
 use phalanx_core::{Checksum, Fixed, FixedVec2, IdGen, PlayerId, Rng};
 use phalanx_sim::Simulation;
@@ -12,18 +12,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
-    /// Units are named by stable `UnitId`, never by `hecs::Entity`.
+    /// Units are named by stable `ObjectId`, never by `hecs::Entity`.
     /// `queue: false` replaces the unit's orders, `true` appends.
     Move {
-        units: Vec<UnitId>,
+        units: Vec<ObjectId>,
         target: FixedVec2,
         queue: bool,
     },
     Stop {
-        units: Vec<UnitId>,
+        units: Vec<ObjectId>,
     },
     Hold {
-        units: Vec<UnitId>,
+        units: Vec<ObjectId>,
     },
 }
 
@@ -36,8 +36,8 @@ pub struct DotWars {
     pub world: World,
     pub rng: Rng,
     ids: IdGen,
-    /// UnitId -> Entity. Sorted by key, so iterating it is deterministic.
-    index: BTreeMap<UnitId, Entity>,
+    /// ObjectId -> Entity. Sorted by key, so iterating it is deterministic.
+    index: BTreeMap<ObjectId, Entity>,
 }
 
 impl DotWars {
@@ -68,8 +68,8 @@ impl DotWars {
         sim
     }
 
-    pub fn spawn_unit(&mut self, pos: FixedVec2, owner: PlayerId) -> UnitId {
-        let id = UnitId(self.ids.next_id());
+    pub fn spawn_unit(&mut self, pos: FixedVec2, owner: PlayerId) -> ObjectId {
+        let id = ObjectId(self.ids.next_id());
         let e = self.world.spawn((
             id,
             Position(pos),
@@ -84,24 +84,32 @@ impl DotWars {
         id
     }
 
-    pub fn despawn_unit(&mut self, id: UnitId) {
+    pub fn despawn(&mut self, id: ObjectId) {
         if let Some(e) = self.index.remove(&id) {
             let _ = self.world.despawn(e);
         }
     }
 
-    pub fn entity(&self, id: UnitId) -> Option<Entity> {
+    pub fn entity(&self, id: ObjectId) -> Option<Entity> {
         self.index.get(&id).copied()
     }
 
-    /// All units sorted by `UnitId`. Use whenever iteration order affects the outcome.
-    pub fn sorted_units(&self) -> Vec<(UnitId, Entity)> {
+    /// All units sorted by `ObjectId`. Use whenever iteration order affects the outcome.
+    pub fn sorted_units(&self) -> Vec<(ObjectId, Entity)> {
+        self.sorted_objects()
+            .into_iter()
+            .filter(|(_, e)| self.world.satisfies::<&Orders>(*e).unwrap_or(false))
+            .collect()
+    }
+
+    /// Everything the sim tracks (units, later buildings and resources), sorted by `ObjectId`.
+    pub fn sorted_objects(&self) -> Vec<(ObjectId, Entity)> {
         self.index.iter().map(|(id, e)| (*id, *e)).collect()
     }
 
-    /// Entities named by a command that exist and belong to `player`, in `UnitId` order, without duplicates.
-    fn owned_targets(&self, player: PlayerId, units: &[UnitId]) -> Vec<Entity> {
-        let unique: BTreeSet<UnitId> = units.iter().copied().collect();
+    /// Entities named by a command that exist and belong to `player`, in `ObjectId` order, without duplicates.
+    fn owned_targets(&self, player: PlayerId, units: &[ObjectId]) -> Vec<Entity> {
+        let unique: BTreeSet<ObjectId> = units.iter().copied().collect();
         unique
             .into_iter()
             .filter_map(|id| self.entity(id))
@@ -109,7 +117,7 @@ impl DotWars {
             .collect()
     }
 
-    fn give_orders(&mut self, player: PlayerId, units: &[UnitId], order: Order, queue: bool) {
+    fn give_orders(&mut self, player: PlayerId, units: &[ObjectId], order: Order, queue: bool) {
         for e in self.owned_targets(player, units) {
             if let Ok(mut o) = self.world.get::<&mut Orders>(e) {
                 o.give(order, queue);
@@ -166,7 +174,7 @@ impl Simulation for DotWars {
         let (s, i) = self.rng.state();
         h.u64(s);
         h.u64(i);
-        for (id, e) in self.sorted_units() {
+        for (id, e) in self.sorted_objects() {
             h.u32(id.0);
             if let Ok(p) = self.world.get::<&Position>(e) {
                 h.i32(p.0.x.raw());
@@ -201,7 +209,7 @@ mod tests {
     const P0: PlayerId = PlayerId(0);
     const P1: PlayerId = PlayerId(1);
 
-    fn mv(units: Vec<UnitId>, x: i32, y: i32, queue: bool) -> Command {
+    fn mv(units: Vec<ObjectId>, x: i32, y: i32, queue: bool) -> Command {
         Command::Move {
             units,
             target: FixedVec2::from_ints(x, y),
@@ -209,7 +217,7 @@ mod tests {
         }
     }
 
-    fn pos(d: &Driver<DotWars>, id: UnitId) -> FixedVec2 {
+    fn pos(d: &Driver<DotWars>, id: ObjectId) -> FixedVec2 {
         let e = d.sim.entity(id).unwrap();
         d.sim.world.get::<&Position>(e).unwrap().0
     }
@@ -224,7 +232,7 @@ mod tests {
             .collect()
     }
 
-    fn single_unit_driver() -> (Driver<DotWars>, UnitId) {
+    fn single_unit_driver() -> (Driver<DotWars>, ObjectId) {
         let mut sim = DotWars::new(7);
         let a = sim.spawn_unit(FixedVec2::ZERO, P0);
         (Driver::new(sim, 3), a)
@@ -337,9 +345,9 @@ mod tests {
         let mut sim = DotWars::new(7);
         let a = sim.spawn_unit(FixedVec2::ZERO, P0);
         let b = sim.spawn_unit(FixedVec2::ZERO, P0);
-        sim.despawn_unit(b);
+        sim.despawn(b);
         let mut d = Driver::new(sim, 3);
-        d.issue(P0, mv(vec![b, a, UnitId(999)], 40, 0, false));
+        d.issue(P0, mv(vec![b, a, ObjectId(999)], 40, 0, false));
         run_ticks(&mut d, 30);
         assert_eq!(pos(&d, a), FixedVec2::from_ints(40, 0));
     }

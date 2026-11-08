@@ -1,7 +1,7 @@
 //! Selection: client-only state, never in the sim. Pure functions, no window needed.
 
 use crate::view::UnitView;
-use dotwars_sim::components::UnitId;
+use dotwars_sim::components::ObjectId;
 use macroquad::prelude::Vec2;
 use phalanx_client::{Camera, phalanx_input::Rect};
 use phalanx_core::PlayerId;
@@ -9,10 +9,10 @@ use std::collections::BTreeSet;
 
 /// Sorted set, so the Commands built from it are identical on every run.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Selection(BTreeSet<UnitId>);
+pub struct Selection(BTreeSet<ObjectId>);
 
 impl Selection {
-    pub fn contains(&self, id: UnitId) -> bool {
+    pub fn contains(&self, id: ObjectId) -> bool {
         self.0.contains(&id)
     }
 
@@ -26,11 +26,11 @@ impl Selection {
     }
 
     #[cfg(test)]
-    pub fn ids(&self) -> impl Iterator<Item = UnitId> + '_ {
+    pub fn ids(&self) -> impl Iterator<Item = ObjectId> + '_ {
         self.0.iter().copied()
     }
 
-    pub fn replace(&mut self, ids: impl IntoIterator<Item = UnitId>) {
+    pub fn replace(&mut self, ids: impl IntoIterator<Item = ObjectId>) {
         self.0 = ids.into_iter().collect();
     }
 
@@ -41,7 +41,7 @@ impl Selection {
     /// Click result: `None` = empty ground.
     /// Without Shift the picked unit replaces the selection (ground clears it);
     /// with Shift it is toggled (ground changes nothing).
-    pub fn click(&mut self, picked: Option<UnitId>, shift: bool) {
+    pub fn click(&mut self, picked: Option<ObjectId>, shift: bool) {
         match (picked, shift) {
             (Some(id), true) => {
                 if !self.0.remove(&id) {
@@ -56,7 +56,7 @@ impl Selection {
 
     /// Box result. With Shift the units are added. Without it they replace the selection,
     /// but an empty box keeps the old one.
-    pub fn box_select(&mut self, ids: Vec<UnitId>, shift: bool) {
+    pub fn box_select(&mut self, ids: Vec<ObjectId>, shift: bool) {
         if shift {
             self.0.extend(ids);
         } else if !ids.is_empty() {
@@ -65,12 +65,12 @@ impl Selection {
     }
 
     /// Drops units that no longer exist.
-    pub fn prune(&mut self, alive: impl Fn(UnitId) -> bool) {
+    pub fn prune(&mut self, alive: impl Fn(ObjectId) -> bool) {
         self.0.retain(|id| alive(*id));
     }
 
     /// Selected units that belong to `local`: the ones that may receive commands.
-    pub fn owned(&self, views: &[UnitView], local: PlayerId) -> Vec<UnitId> {
+    pub fn owned(&self, views: &[UnitView], local: PlayerId) -> Vec<ObjectId> {
         views
             .iter()
             .filter(|v| v.team == local && self.0.contains(&v.id))
@@ -80,9 +80,9 @@ impl Selection {
 }
 
 /// Nearest unit whose body (plus `tolerance` world units) covers `world_pos`.
-/// Ties go to the lower `UnitId`.
-pub fn pick(views: &[UnitView], world_pos: Vec2, tolerance: f32) -> Option<UnitId> {
-    let mut best: Option<(f32, UnitId)> = None;
+/// Ties go to the lower `ObjectId`.
+pub fn pick(views: &[UnitView], world_pos: Vec2, tolerance: f32) -> Option<ObjectId> {
+    let mut best: Option<(f32, ObjectId)> = None;
     for v in views {
         let d = v.pos.distance(world_pos);
         if d <= v.radius + tolerance && best.is_none_or(|(bd, _)| d < bd) {
@@ -93,7 +93,12 @@ pub fn pick(views: &[UnitView], world_pos: Vec2, tolerance: f32) -> Option<UnitI
 }
 
 /// Own units whose centre is inside the screen-space rectangle.
-pub fn box_select(views: &[UnitView], rect: Rect, camera: &Camera, local: PlayerId) -> Vec<UnitId> {
+pub fn box_select(
+    views: &[UnitView],
+    rect: Rect,
+    camera: &Camera,
+    local: PlayerId,
+) -> Vec<ObjectId> {
     views
         .iter()
         .filter(|v| v.team == local)
@@ -114,7 +119,7 @@ mod tests {
 
     fn view(id: u32, team: PlayerId, x: f32, y: f32) -> UnitView {
         UnitView {
-            id: UnitId(id),
+            id: ObjectId(id),
             team,
             pos: Vec2::new(x, y),
             radius: 8.0,
@@ -132,14 +137,14 @@ mod tests {
     #[test]
     fn pick_takes_the_nearest_of_overlapping_units() {
         let v = views();
-        assert_eq!(pick(&v, Vec2::new(109.0, 100.0), 0.0), Some(UnitId(1)));
-        assert_eq!(pick(&v, Vec2::new(103.0, 100.0), 0.0), Some(UnitId(0)));
+        assert_eq!(pick(&v, Vec2::new(109.0, 100.0), 0.0), Some(ObjectId(1)));
+        assert_eq!(pick(&v, Vec2::new(103.0, 100.0), 0.0), Some(ObjectId(0)));
     }
 
     #[test]
     fn pick_tie_goes_to_lower_id() {
         let v = views();
-        assert_eq!(pick(&v, Vec2::new(106.0, 100.0), 0.0), Some(UnitId(0)));
+        assert_eq!(pick(&v, Vec2::new(106.0, 100.0), 0.0), Some(ObjectId(0)));
     }
 
     #[test]
@@ -152,7 +157,7 @@ mod tests {
     #[test]
     fn pick_tolerance_extends_reach() {
         let v = views();
-        assert_eq!(pick(&v, Vec2::new(300.0, 111.0), 4.0), Some(UnitId(2)));
+        assert_eq!(pick(&v, Vec2::new(300.0, 111.0), 4.0), Some(ObjectId(2)));
         assert_eq!(pick(&v, Vec2::new(300.0, 113.0), 4.0), None);
     }
 
@@ -161,7 +166,7 @@ mod tests {
         let v = views();
         let cam = Camera::default();
         let all = Rect::from_corners([0.0, 0.0], [500.0, 500.0]);
-        assert_eq!(box_select(&v, all, &cam, ME), [UnitId(0), UnitId(1)]);
+        assert_eq!(box_select(&v, all, &cam, ME), [ObjectId(0), ObjectId(1)]);
 
         // Zoomed in 2x with the view moved: unit 0 is at screen (0, 0) .. unit 1 at (24, 0).
         let cam = Camera {
@@ -169,15 +174,15 @@ mod tests {
             zoom: 2.0,
         };
         let small = Rect::from_corners([-5.0, -5.0], [10.0, 10.0]);
-        assert_eq!(box_select(&v, small, &cam, ME), [UnitId(0)]);
+        assert_eq!(box_select(&v, small, &cam, ME), [ObjectId(0)]);
     }
 
     #[test]
     fn click_replaces_and_clears() {
         let mut s = Selection::default();
-        s.click(Some(UnitId(0)), false);
-        s.click(Some(UnitId(1)), false);
-        assert_eq!(s.ids().collect::<Vec<_>>(), [UnitId(1)]);
+        s.click(Some(ObjectId(0)), false);
+        s.click(Some(ObjectId(1)), false);
+        assert_eq!(s.ids().collect::<Vec<_>>(), [ObjectId(1)]);
         s.click(None, true);
         assert_eq!(s.len(), 1);
         s.click(None, false);
@@ -187,33 +192,33 @@ mod tests {
     #[test]
     fn shift_click_toggles() {
         let mut s = Selection::default();
-        s.click(Some(UnitId(0)), true);
-        s.click(Some(UnitId(1)), true);
+        s.click(Some(ObjectId(0)), true);
+        s.click(Some(ObjectId(1)), true);
         assert_eq!(s.len(), 2);
-        s.click(Some(UnitId(0)), true);
-        assert_eq!(s.ids().collect::<Vec<_>>(), [UnitId(1)]);
+        s.click(Some(ObjectId(0)), true);
+        assert_eq!(s.ids().collect::<Vec<_>>(), [ObjectId(1)]);
     }
 
     #[test]
     fn box_replaces_adds_or_keeps() {
         let mut s = Selection::default();
-        s.box_select(vec![UnitId(0)], false);
+        s.box_select(vec![ObjectId(0)], false);
         s.box_select(vec![], false); // empty box keeps the selection
-        assert_eq!(s.ids().collect::<Vec<_>>(), [UnitId(0)]);
-        s.box_select(vec![UnitId(1)], true);
+        assert_eq!(s.ids().collect::<Vec<_>>(), [ObjectId(0)]);
+        s.box_select(vec![ObjectId(1)], true);
         assert_eq!(s.len(), 2);
-        s.box_select(vec![UnitId(5)], false);
-        assert_eq!(s.ids().collect::<Vec<_>>(), [UnitId(5)]);
+        s.box_select(vec![ObjectId(5)], false);
+        assert_eq!(s.ids().collect::<Vec<_>>(), [ObjectId(5)]);
     }
 
     #[test]
     fn prune_and_owned() {
         let v = views();
         let mut s = Selection::default();
-        s.replace([UnitId(0), UnitId(2), UnitId(9)]);
+        s.replace([ObjectId(0), ObjectId(2), ObjectId(9)]);
         s.prune(|id| id.0 != 9);
         assert_eq!(s.len(), 2);
         // Enemy unit 2 is selected (inspecting) but cannot receive commands.
-        assert_eq!(s.owned(&v, ME), [UnitId(0)]);
+        assert_eq!(s.owned(&v, ME), [ObjectId(0)]);
     }
 }

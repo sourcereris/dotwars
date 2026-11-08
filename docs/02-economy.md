@@ -99,7 +99,7 @@ Almost everything here is **game** (`dotwars_sim`). Two candidates for Phalanx, 
 
 | Step | What | Needs | Status |
 |---|---|---|---|
-| E0 | Rename `UnitId` → `ObjectId` (one index for units, buildings, resources) | C2–C3 ✅ | ⬜ next |
+| E0 | Rename `UnitId` → `ObjectId` (one index for units, buildings, resources) | C2–C3 ✅ | ✅ |
 | E1 | Resource nodes + drop-off placed by `demo_scenario`; `PlayerStock`; drawn in the client; top-bar counter | E0 | ⬜ |
 | E2 | `Worker` component, `Order::Gather`, `Command::Gather`; one worker, one node: full trip and deposit | E1, C3 | ⬜ |
 | E3 | Depletion, `NodeDepleted`, retarget to the nearest node (deterministic `nearest_by`) | E2 | ⬜ |
@@ -241,4 +241,7 @@ See **Done when** under Steps, checked by hand in the game. All sim tests and cl
 
 ## Status
 
-**Implemented:** nothing yet. The design and implementation plan are written; **E0 can start now** (C2–C3 are in).
+**Implemented:** E0. **Next:** E1.
+- E0: `UnitId` → `ObjectId` everywhere (sim + client), `despawn_unit` → `despawn`. `sorted_objects()` returns everything in the index;
+  `sorted_units()` keeps only objects with `Orders`, so the client never sees nodes or buildings as units.
+  The checksum walks `sorted_objects()`. Behaviour unchanged: sim 10, client 16 tests pass.

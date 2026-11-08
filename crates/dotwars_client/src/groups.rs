@@ -1,7 +1,7 @@
 //! Control groups (Ctrl+N assigns, N selects, double tap centers). Client-only state.
 //! Time is passed in, so the logic is a pure function of its inputs.
 
-use dotwars_sim::components::UnitId;
+use dotwars_sim::components::ObjectId;
 use std::collections::BTreeSet;
 
 /// Two taps on the same number within this many seconds also center the camera.
@@ -9,32 +9,32 @@ pub const DOUBLE_TAP_SECONDS: f64 = 0.3;
 
 #[derive(Clone, Debug, Default)]
 pub struct ControlGroups {
-    groups: [BTreeSet<UnitId>; 10],
+    groups: [BTreeSet<ObjectId>; 10],
     last_tap: Option<(u8, f64)>,
 }
 
 /// Result of pressing a group number.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GroupSelect {
-    pub ids: Vec<UnitId>,
+    pub ids: Vec<ObjectId>,
     pub center: bool,
 }
 
 impl ControlGroups {
     /// Replaces group `n`. An empty selection is ignored, so a stray Ctrl+N can't wipe a group.
-    pub fn assign(&mut self, n: u8, ids: impl IntoIterator<Item = UnitId>) {
-        let set: BTreeSet<UnitId> = ids.into_iter().collect();
+    pub fn assign(&mut self, n: u8, ids: impl IntoIterator<Item = ObjectId>) {
+        let set: BTreeSet<ObjectId> = ids.into_iter().collect();
         if !set.is_empty() {
             self.groups[n as usize % 10] = set;
         }
     }
 
-    pub fn add(&mut self, n: u8, ids: impl IntoIterator<Item = UnitId>) {
+    pub fn add(&mut self, n: u8, ids: impl IntoIterator<Item = ObjectId>) {
         self.groups[n as usize % 10].extend(ids);
     }
 
     #[cfg(test)]
-    pub fn ids(&self, n: u8) -> impl Iterator<Item = UnitId> + '_ {
+    pub fn ids(&self, n: u8) -> impl Iterator<Item = ObjectId> + '_ {
         self.groups[n as usize % 10].iter().copied()
     }
 
@@ -43,7 +43,7 @@ impl ControlGroups {
         &mut self,
         n: u8,
         now: f64,
-        alive: impl Fn(UnitId) -> bool,
+        alive: impl Fn(ObjectId) -> bool,
     ) -> Option<GroupSelect> {
         let n = n % 10;
         let group = &mut self.groups[n as usize];
@@ -67,11 +67,11 @@ impl ControlGroups {
 mod tests {
     use super::*;
 
-    fn ids(v: &[u32]) -> Vec<UnitId> {
-        v.iter().map(|i| UnitId(*i)).collect()
+    fn ids(v: &[u32]) -> Vec<ObjectId> {
+        v.iter().map(|i| ObjectId(*i)).collect()
     }
 
-    fn alive(_: UnitId) -> bool {
+    fn alive(_: ObjectId) -> bool {
         true
     }
 

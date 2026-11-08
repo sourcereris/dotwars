@@ -3,7 +3,7 @@
 
 use dotwars_sim::{
     DotWars,
-    components::{Body, Position, PrevPosition, Team, UnitId},
+    components::{Body, ObjectId, Position, PrevPosition, Team},
 };
 use macroquad::prelude::Vec2;
 use phalanx_client::lerp_pos;
@@ -11,14 +11,14 @@ use phalanx_core::PlayerId;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UnitView {
-    pub id: UnitId,
+    pub id: ObjectId,
     pub team: PlayerId,
     /// World position, interpolated between the last two ticks.
     pub pos: Vec2,
     pub radius: f32,
 }
 
-/// All units, sorted by `UnitId`.
+/// All units, sorted by `ObjectId`.
 pub fn build_views(sim: &DotWars, alpha: f32) -> Vec<UnitView> {
     sim.sorted_units()
         .into_iter()
