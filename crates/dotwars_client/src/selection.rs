@@ -135,6 +135,7 @@ mod tests {
             radius: 8.0,
             worker: false,
             carrying: false,
+            hp: (1, 1),
         }
     }
 

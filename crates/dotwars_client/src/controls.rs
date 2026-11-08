@@ -14,8 +14,10 @@ pub enum Action {
     PanRight,
     /// Start placing a building (needs an own worker selected).
     Build(BuildingKind),
-    /// Queue the first unit the selected buildings can train.
-    Train,
+    /// Queue the unit in this slot (`Q`, `W`, `E`) of what the selected buildings can train.
+    Train(usize),
+    /// `A`: the next left click attacks or attack-moves.
+    AttackMode,
     /// Leave build mode.
     CancelMode,
     /// `N`: select group N (double tap also centers the camera).
@@ -47,7 +49,10 @@ pub fn default_bindings() -> Bindings<Action> {
         .bind(Key::B, Action::Build(BuildingKind::Barracks))
         .bind(Key::V, Action::Build(BuildingKind::SupplyDepot))
         .bind(Key::N, Action::Build(BuildingKind::Base))
-        .bind(Key::Q, Action::Train)
+        .bind(Key::Q, Action::Train(0))
+        .bind(Key::W, Action::Train(1))
+        .bind(Key::E, Action::Train(2))
+        .bind(Key::A, Action::AttackMode)
         .bind(Key::Escape, Action::CancelMode)
         // Arrows only: WASD would collide with S = Stop.
         .bind(Key::Up, Action::PanUp)

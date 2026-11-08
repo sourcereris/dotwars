@@ -7,7 +7,7 @@
 use crate::components::{
     Body, DropOff, GatherState, ObjectId, Order, Orders, Position, ResourceNode, Team, Worker,
 };
-use crate::{DotWars, Event, systems::SPEED};
+use crate::{DotWars, Event};
 use hecs::Entity;
 use phalanx_core::{Fixed, FixedVec2};
 use phalanx_sim::{Cooldown, nearest_by};
@@ -26,16 +26,22 @@ const SEARCH_RADIUS_SQ: i64 = (400 * 400) << Fixed::FRAC_BITS;
 pub const NODE_RADIUS: Fixed = Fixed::from_int(12);
 pub const DROPOFF_RADIUS: Fixed = Fixed::from_int(24);
 pub const WORKER_RADIUS: Fixed = Fixed::from_int(6);
+pub(crate) const WORKER_SPEED: Fixed = Fixed::from_int(4);
 
-/// Moves up to `SPEED` toward `target` and stops once within `stop_at`. True when arrived.
-pub(crate) fn step_toward(pos: &mut FixedVec2, target: FixedVec2, stop_at: Fixed) -> bool {
+/// Moves up to `speed` toward `target` and stops once within `stop_at`. True when arrived.
+pub(crate) fn step_toward(
+    pos: &mut FixedVec2,
+    target: FixedVec2,
+    stop_at: Fixed,
+    speed: Fixed,
+) -> bool {
     let d = target - *pos;
     let len = d.length();
     if len <= stop_at {
         return true;
     }
     let remaining = len - stop_at;
-    let step = if remaining < SPEED { remaining } else { SPEED };
+    let step = if remaining < speed { remaining } else { speed };
     *pos = *pos + d.with_length(step);
     step == remaining
 }
@@ -184,7 +190,7 @@ impl DotWars {
                     }
                 },
                 Some((npos, nr)) => {
-                    if !step_toward(&mut pos, npos, nr + wr) {
+                    if !step_toward(&mut pos, npos, nr + wr, WORKER_SPEED) {
                         w.state = GatherState::ToNode { node, waited: 0 };
                     } else if self.slot_free(node, id) {
                         if let Some(ne) = self.entity(node)
@@ -230,7 +236,7 @@ impl DotWars {
             GatherState::Returning { node } => {
                 // No drop-off: stand still and keep the cargo.
                 if let Some((did, dpos, dr)) = self.nearest_dropoff(pos, team)
-                    && step_toward(&mut pos, dpos, dr + wr)
+                    && step_toward(&mut pos, dpos, dr + wr, WORKER_SPEED)
                 {
                     if w.carry > 0 {
                         self.stocks.entry(team).or_default().minerals += w.carry;

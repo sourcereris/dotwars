@@ -4,7 +4,7 @@
 use dotwars_sim::{
     DotWars,
     components::{
-        Body, Building, Construction, DropOff, ObjectId, Position, PrevPosition, Producer,
+        Body, Building, Construction, DropOff, Health, ObjectId, Position, PrevPosition, Producer,
         ResourceNode, Team, Worker,
     },
     data::{self, BuildingKind, UnitKind},
@@ -23,6 +23,8 @@ pub struct UnitView {
     pub worker: bool,
     /// A worker holding minerals.
     pub carrying: bool,
+    /// `(hp, max)`.
+    pub hp: (u32, u32),
 }
 
 /// A resource node. Static, so no interpolation.
@@ -42,6 +44,34 @@ pub struct DropOffView {
     pub radius: f32,
 }
 
+fn hp_pair(h: Option<Health>) -> (u32, u32) {
+    h.map_or((1, 1), |h| (h.hp, h.max))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BarLevel {
+    Green,
+    Yellow,
+    Red,
+}
+
+/// Health bar color: green above 60 %, yellow above 30 %, red below.
+pub fn bar_level(hp: (u32, u32)) -> BarLevel {
+    let (hp, max) = (hp.0 as u64 * 100, hp.1.max(1) as u64);
+    if hp > max * 60 {
+        BarLevel::Green
+    } else if hp > max * 30 {
+        BarLevel::Yellow
+    } else {
+        BarLevel::Red
+    }
+}
+
+/// Bars show on damaged or selected objects only.
+pub fn show_bar(hp: (u32, u32), selected: bool) -> bool {
+    selected || hp.0 < hp.1
+}
+
 /// All units, sorted by `ObjectId`.
 pub fn build_views(sim: &DotWars, alpha: f32) -> Vec<UnitView> {
     sim.sorted_units()
@@ -59,6 +89,7 @@ pub fn build_views(sim: &DotWars, alpha: f32) -> Vec<UnitView> {
                 radius,
                 worker: worker.is_some(),
                 carrying: worker.is_some_and(|w| w.carry > 0),
+                hp: hp_pair(sim.world.get::<&Health>(e).ok().map(|h| *h)),
             })
         })
         .collect()
@@ -117,6 +148,7 @@ pub struct BuildingView {
     /// Progress of the front queue item, 0..1.
     pub train_progress: f32,
     pub rally: Option<Vec2>,
+    pub hp: (u32, u32),
 }
 
 impl BuildingView {
@@ -175,7 +207,30 @@ pub fn build_buildings(sim: &DotWars) -> Vec<BuildingView> {
                 queue,
                 train_progress,
                 rally,
+                hp: hp_pair(sim.world.get::<&Health>(e).ok().map(|h| *h)),
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bar_colors_switch_at_sixty_and_thirty_percent() {
+        assert_eq!(bar_level((100, 100)), BarLevel::Green);
+        assert_eq!(bar_level((61, 100)), BarLevel::Green);
+        assert_eq!(bar_level((60, 100)), BarLevel::Yellow);
+        assert_eq!(bar_level((31, 100)), BarLevel::Yellow);
+        assert_eq!(bar_level((30, 100)), BarLevel::Red);
+        assert_eq!(bar_level((0, 100)), BarLevel::Red);
+    }
+
+    #[test]
+    fn full_health_hides_the_bar_unless_selected() {
+        assert!(!show_bar((70, 70), false));
+        assert!(show_bar((70, 70), true));
+        assert!(show_bar((69, 70), false));
+    }
 }

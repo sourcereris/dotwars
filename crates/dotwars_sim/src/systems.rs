@@ -1,9 +1,6 @@
 use crate::components::{Order, Orders, Position, PrevPosition};
+use crate::data::{self, UnitKind};
 use hecs::World;
-use phalanx_core::Fixed;
-
-/// Placeholder speed until unit data files exist.
-pub(crate) const SPEED: Fixed = Fixed::from_int(4);
 
 pub fn store_prev_positions(world: &mut World) {
     for (_, (prev, pos)) in world.query_mut::<(&mut PrevPosition, &Position)>() {
@@ -22,16 +19,17 @@ pub fn advance_orders(world: &mut World) {
 
 /// Straight-line move. Each unit only touches itself, so query order does not matter.
 pub fn movement(world: &mut World) {
-    for (_, (pos, orders)) in world.query_mut::<(&mut Position, &mut Orders)>() {
+    for (_, (pos, orders, kind)) in world.query_mut::<(&mut Position, &mut Orders, &UnitKind)>() {
         let Some(Order::Move(target)) = orders.current else {
             continue;
         };
+        let speed = data::unit(*kind).speed;
         let d = target - pos.0;
-        if d.length_sq() <= (SPEED * SPEED).raw() as i64 {
+        if d.length_sq() <= (speed * speed).raw() as i64 {
             pos.0 = target;
             orders.current = None;
         } else {
-            pos.0 = pos.0 + d.with_length(SPEED);
+            pos.0 = pos.0 + d.with_length(speed);
         }
     }
 }

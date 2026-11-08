@@ -21,6 +21,7 @@ use phalanx_client::{
 use phalanx_core::PlayerId;
 use phalanx_sim::{Driver, FixedStep};
 use selection::{Selection, box_select, pick};
+use view::{BarLevel, bar_level, show_bar};
 use view::{
     BuildingView, NodeView, UnitView, build_buildings, build_dropoffs, build_nodes, build_views,
 };
@@ -52,6 +53,8 @@ async fn main() {
     let mut last_gesture: Option<Gesture> = None;
     // Client-only: which building the next left click places.
     let mut build_mode: Option<BuildingKind> = None;
+    // Client-only: the next left click attacks (enemy) or attack-moves (ground).
+    let mut attack_mode = false;
 
     loop {
         let screen = vec2(screen_width(), screen_height());
@@ -82,6 +85,7 @@ async fn main() {
             &mut camera,
             &mut show_debug,
             &mut build_mode,
+            &mut attack_mode,
             screen,
         );
         let world_mouse = camera.screen_to_world(input.mouse_pos().into());
@@ -95,6 +99,32 @@ async fn main() {
                 &mut build_mode,
                 kind,
             );
+        } else if attack_mode {
+            let selected = selection.owned(&views, LOCAL_PLAYER);
+            let targets = orders::Targets {
+                views: &views,
+                nodes: &nodes,
+                buildings: &buildings,
+                local: LOCAL_PLAYER,
+            };
+            for g in input.gestures() {
+                let Gesture::Click {
+                    button: Button::Left,
+                    pos,
+                    mods,
+                } = *g
+                else {
+                    continue;
+                };
+                let world = camera.screen_to_world(pos.into());
+                let tol = PICK_TOLERANCE_PX / camera.zoom;
+                if let Some(cmd) =
+                    orders::attack_click_command(&targets, &selected, world, tol, mods.shift)
+                {
+                    driver.issue(LOCAL_PLAYER, cmd);
+                    attack_mode = mods.shift;
+                }
+            }
         } else {
             handle_gestures(
                 &input,
@@ -107,8 +137,9 @@ async fn main() {
         }
 
         if input.button_pressed(Button::Right) {
-            if build_mode.is_some() {
+            if build_mode.is_some() || attack_mode {
                 build_mode = None; // right click cancels, it does not also move
+                attack_mode = false;
             } else {
                 let selected = selection.owned(&views, LOCAL_PLAYER);
                 let targets = orders::Targets {
@@ -140,7 +171,8 @@ async fn main() {
         }
         let dropoffs = build_dropoffs(&driver.sim);
         let buildings = build_buildings(&driver.sim);
-        effects.on_events(&events, LOCAL_PLAYER, &dropoffs, &buildings);
+        let views_now = build_views(&driver.sim, step.alpha());
+        effects.on_events(&events, LOCAL_PLAYER, &views_now, &dropoffs, &buildings);
         events.clear();
         effects.update(get_frame_time());
         selection.prune(|id| driver.sim.entity(id).is_some());
@@ -157,6 +189,15 @@ async fn main() {
             draw_ghost(&driver.sim, kind, world_mouse, &camera);
         }
         draw_effects(&effects, &camera);
+        if attack_mode {
+            draw_text(
+                "ATTACK: click an enemy or the ground",
+                10.0,
+                screen.y - 14.0,
+                26.0,
+                RED,
+            );
+        }
         draw_top_bar(&driver.sim, screen);
         draw_banner(&effects, screen);
         if let Some(r) = input.drag_rect(Button::Left) {
@@ -190,6 +231,7 @@ fn handle_actions(
     camera: &mut Camera,
     show_debug: &mut bool,
     build_mode: &mut Option<BuildingKind>,
+    attack_mode: &mut bool,
     screen: Vec2,
 ) {
     for action in bindings.triggered(input) {
@@ -203,10 +245,19 @@ fn handle_actions(
                     *build_mode = Some(kind);
                 }
             }
-            Action::CancelMode => *build_mode = None,
-            Action::Train => {
+            Action::CancelMode => {
+                *build_mode = None;
+                *attack_mode = false;
+            }
+            Action::AttackMode => {
+                if !selection.owned(views, LOCAL_PLAYER).is_empty() {
+                    *attack_mode = true;
+                    *build_mode = None;
+                }
+            }
+            Action::Train(slot) => {
                 let chosen = selection.owned_buildings(buildings, LOCAL_PLAYER);
-                for cmd in orders::train_commands(buildings, &chosen) {
+                for cmd in orders::train_commands(buildings, &chosen, slot) {
                     driver.issue(LOCAL_PLAYER, cmd);
                 }
             }
@@ -365,11 +416,26 @@ fn draw_units(views: &[UnitView], selection: &Selection, camera: &Camera) {
         if v.carrying {
             draw_circle(p.x, p.y - r - 2.0 * camera.zoom, 3.0 * camera.zoom, GOLD);
         }
-        if selection.contains(v.id) {
+        let selected = selection.contains(v.id);
+        if selected {
             let ring = if own { GREEN } else { YELLOW };
             draw_circle_lines(p.x, p.y, r + 3.0, 2.0, ring);
         }
+        if show_bar(v.hp, selected) {
+            draw_health_bar(p.x - r, p.y - r - 8.0 * camera.zoom.max(0.7), r * 2.0, v.hp);
+        }
     }
+}
+
+fn draw_health_bar(x: f32, y: f32, w: f32, hp: (u32, u32)) {
+    let color = match bar_level(hp) {
+        BarLevel::Green => GREEN,
+        BarLevel::Yellow => YELLOW,
+        BarLevel::Red => RED,
+    };
+    let frac = hp.0 as f32 / hp.1.max(1) as f32;
+    draw_rectangle(x, y, w, 4.0, Color::new(0.0, 0.0, 0.0, 0.7));
+    draw_rectangle(x, y, w * frac, 4.0, color);
 }
 
 const GOLD_NODE: Color = Color::new(0.95, 0.78, 0.2, 1.0);
@@ -414,7 +480,11 @@ fn draw_buildings(buildings: &[BuildingView], selection: &Selection, camera: &Ca
             draw_rectangle(p.x, p.y + h + 3.0, w, 5.0, Color::new(0.0, 0.0, 0.0, 0.6));
             draw_rectangle(p.x, p.y + h + 3.0, w * done, 5.0, GREEN);
         }
-        if !selection.contains(b.id) {
+        let selected = selection.contains(b.id);
+        if show_bar(b.hp, selected) {
+            draw_health_bar(p.x, p.y - 8.0, w, b.hp);
+        }
+        if !selected {
             continue;
         }
         let ring = if b.team == LOCAL_PLAYER {
@@ -500,6 +570,23 @@ fn draw_effects(effects: &Effects, camera: &Camera) {
                 let (w, h) = (size.x * camera.zoom, size.y * camera.zoom);
                 draw_rectangle(q.x, q.y, w, h, Color::new(1.0, 1.0, 1.0, 0.6 * (1.0 - t)));
             }
+            Kind::Burst { radius, square } => {
+                let r = (radius * (0.5 + t)) * camera.zoom;
+                let c = Color::new(1.0, 0.6, 0.2, 0.8 * (1.0 - t));
+                if *square {
+                    draw_rectangle(p.x - r, p.y - r, r * 2.0, r * 2.0, c);
+                } else {
+                    draw_circle(p.x, p.y, r, c);
+                }
+            }
+            Kind::Tracer(to) => {
+                let q = camera.world_to_screen(*to);
+                draw_line(p.x, p.y, q.x, q.y, 2.0, Color::new(1.0, 1.0, 0.6, 1.0 - t));
+            }
+            Kind::Hit => {
+                let r = (4.0 + 8.0 * t) * camera.zoom;
+                draw_circle_lines(p.x, p.y, r, 2.0, Color::new(1.0, 1.0, 1.0, 1.0 - t));
+            }
             Kind::Ring => {
                 let r = (8.0 + 24.0 * t) * camera.zoom;
                 draw_circle_lines(p.x, p.y, r, 2.0, Color::new(0.95, 0.78, 0.2, 1.0 - t));
@@ -529,7 +616,7 @@ fn draw_debug(
     let mods = input.modifiers();
     let lines = [
         format!(
-            "tick {}   RMB move/gather/rally  S stop  H hold  B barracks  V depot  N base (workers)  Q train  Esc cancel  LMB click/box  Ctrl+N group  arrows/MMB pan  F1 debug",
+            "tick {}   RMB move/gather/attack/rally  S stop  H hold  A attack  B barracks  V depot  N base (workers)  Q/W/E train  Esc cancel  LMB click/box  Ctrl+N group  arrows/MMB pan  F1 debug",
             driver.tick()
         ),
         format!(
@@ -554,6 +641,7 @@ fn draw_debug(
             build_nodes(&driver.sim).len(),
             first_worker_state(driver, selection)
         ),
+        first_combat_state(driver, selection),
     ];
     for (i, l) in lines.iter().enumerate() {
         draw_text(l, 10.0, 20.0 + i as f32 * 20.0, 20.0, WHITE);
@@ -570,6 +658,35 @@ fn first_worker_state(driver: &Driver<DotWars>, selection: &Selection) -> String
             Some(format!("worker {}: carry {} {:?}", id.0, w.carry, w.state))
         })
         .unwrap_or_else(|| "no worker selected".into())
+}
+
+/// Target, cooldown and anchor of the first selected fighter, for the debug overlay.
+fn first_combat_state(driver: &Driver<DotWars>, selection: &Selection) -> String {
+    selection
+        .ids()
+        .find_map(|id| {
+            let e = driver.sim.entity(id)?;
+            let c = driver
+                .sim
+                .world
+                .get::<&dotwars_sim::components::Combat>(e)
+                .ok()?;
+            let hp = driver
+                .sim
+                .world
+                .get::<&dotwars_sim::components::Health>(e)
+                .ok()?;
+            Some(format!(
+                "unit {}: hp {}/{}  target {:?}  cooldown {}  anchor {:?}",
+                id.0,
+                hp.hp,
+                hp.max,
+                c.target.map(|t| t.0),
+                c.cooldown.remaining(),
+                c.anchor.map(|a| a.to_f32()),
+            ))
+        })
+        .unwrap_or_else(|| "no fighter selected".into())
 }
 
 fn describe(g: Option<Gesture>) -> String {

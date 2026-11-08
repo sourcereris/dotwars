@@ -38,6 +38,10 @@ pub enum Order {
     },
     /// Work on an unfinished own building until it is done.
     Construct(ObjectId),
+    /// Chase and hit one object until it is gone.
+    Attack(ObjectId),
+    /// Walk to the point, fighting whatever comes within acquire range on the way.
+    AttackMove(FixedVec2),
 }
 
 /// Current order plus a queue of following ones. `current == None` means idle.
@@ -142,4 +146,28 @@ pub struct Producer {
     pub progress: u16,
     /// Where new units walk to. `None`: they stay where they spawn.
     pub rally: Option<FixedVec2>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Health {
+    pub hp: u32,
+    pub max: u32,
+}
+
+/// Fighting state of a unit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Combat {
+    pub cooldown: Cooldown,
+    pub target: Option<ObjectId>,
+    /// Where an idle unit was standing when it started a fight; it walks back there after.
+    pub anchor: Option<FixedVec2>,
+    /// Ticks until an auto-acquired target is re-evaluated.
+    pub retarget_in: u8,
+}
+
+/// The last unit that hurt this one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LastHit {
+    pub by: ObjectId,
+    pub tick: u32,
 }

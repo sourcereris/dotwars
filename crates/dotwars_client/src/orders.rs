@@ -29,6 +29,47 @@ pub fn pick_building(buildings: &[BuildingView], world_pos: Vec2) -> Option<&Bui
     buildings.iter().find(|b| b.contains(world_pos))
 }
 
+/// The enemy under `world_pos`: the nearest unit whose body (plus `tolerance`) covers it, else a building.
+pub fn pick_enemy(t: &Targets, world_pos: Vec2, tolerance: f32) -> Option<ObjectId> {
+    let mut best: Option<(f32, ObjectId)> = None;
+    for v in t.views.iter().filter(|v| v.team != t.local) {
+        let d = v.pos.distance(world_pos);
+        if d <= v.radius + tolerance && best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, v.id));
+        }
+    }
+    best.map(|(_, id)| id).or_else(|| {
+        pick_building(t.buildings, world_pos)
+            .filter(|b| b.team != t.local)
+            .map(|b| b.id)
+    })
+}
+
+/// Left click in attack mode: an enemy under the cursor is attacked, anything else is attack-moved to.
+pub fn attack_click_command(
+    t: &Targets,
+    selected: &[ObjectId],
+    world_pos: Vec2,
+    tolerance: f32,
+    queue: bool,
+) -> Option<Command> {
+    if selected.is_empty() {
+        return None;
+    }
+    Some(match pick_enemy(t, world_pos, tolerance) {
+        Some(target) => Command::Attack {
+            units: selected.to_vec(),
+            target,
+            queue,
+        },
+        None => Command::AttackMove {
+            units: selected.to_vec(),
+            target: to_fixed(world_pos),
+            queue,
+        },
+    })
+}
+
 /// What a right click can hit.
 pub struct Targets<'a> {
     pub views: &'a [UnitView],
@@ -38,6 +79,7 @@ pub struct Targets<'a> {
 }
 
 /// Smart right click for selected units (`selected` must already be the player's own).
+/// - Enemy unit or building: everyone attacks it.
 /// - Resource node: workers gather, everyone else walks there.
 /// - Own unfinished building: workers construct, everyone else walks there.
 /// - Anywhere else: everyone moves.
@@ -49,6 +91,13 @@ pub fn right_click_commands(
 ) -> Vec<Command> {
     if selected.is_empty() {
         return Vec::new();
+    }
+    if let Some(target) = pick_enemy(t, world_pos, tolerance) {
+        return vec![Command::Attack {
+            units: selected.to_vec(),
+            target,
+            queue: false,
+        }];
     }
     let is_worker = |id: &ObjectId| t.views.iter().any(|v| v.id == *id && v.worker);
     let (workers, others): (Vec<_>, Vec<_>) = selected.iter().copied().partition(is_worker);
@@ -109,15 +158,19 @@ pub fn rally_command(
     })
 }
 
-/// `Q`: queue the first unit each selected, finished building can train.
-pub fn train_commands(buildings: &[BuildingView], selected: &[ObjectId]) -> Vec<Command> {
+/// `Q`/`W`/`E`: queue the unit in `slot` of each selected, finished building's train list.
+pub fn train_commands(
+    buildings: &[BuildingView],
+    selected: &[ObjectId],
+    slot: usize,
+) -> Vec<Command> {
     buildings
         .iter()
         .filter(|b| selected.contains(&b.id) && b.finished())
         .filter_map(|b| {
             Some(Command::Train {
                 building: b.id,
-                kind: *b.trains().first()?,
+                kind: *b.trains().get(slot)?,
             })
         })
         .collect()
@@ -193,6 +246,7 @@ mod tests {
             radius: 8.0,
             worker,
             carrying: false,
+            hp: (1, 1),
         }
     }
 
@@ -221,6 +275,7 @@ mod tests {
             queue: vec![UnitKind::Soldier],
             train_progress: 0.0,
             rally: None,
+            hp: (1, 1),
         }
     }
 
@@ -305,16 +360,15 @@ mod tests {
     }
 
     #[test]
-    fn finished_or_enemy_buildings_are_just_ground() {
+    fn finished_own_buildings_are_just_ground_and_enemy_ones_are_attacked() {
         let views = [unit(0, true)];
         let at = Vec2::new(510.0, 490.0);
-        for b in [
-            building(7, ME, BuildingKind::Barracks, None),
-            building(7, PlayerId(1), BuildingKind::Barracks, Some(0.3)),
-        ] {
-            let out = cmds(&views, &[], &[b], &[0], at);
-            assert!(matches!(out.as_slice(), [Command::Move { .. }]));
-        }
+        let own = building(7, ME, BuildingKind::Barracks, None);
+        let out = cmds(&views, &[], &[own], &[0], at);
+        assert!(matches!(out.as_slice(), [Command::Move { .. }]));
+        let enemy = building(7, PlayerId(1), BuildingKind::Barracks, Some(0.3));
+        let out = cmds(&views, &[], &[enemy], &[0], at);
+        assert!(matches!(out.as_slice(), [Command::Attack { .. }]));
     }
 
     #[test]
@@ -344,7 +398,7 @@ mod tests {
             panic!("expected a rally command");
         };
         assert_eq!(buildings, [ObjectId(1)]);
-        let train = train_commands(&all, &sel);
+        let train = train_commands(&all, &sel, 0);
         assert_eq!(train.len(), 1);
         assert!(matches!(
             &train[0],
@@ -396,5 +450,75 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    fn enemy_at(id: u32, pos: Vec2) -> UnitView {
+        UnitView {
+            team: PlayerId(1),
+            ..unit_at(id, false, pos)
+        }
+    }
+
+    #[test]
+    fn right_click_on_an_enemy_unit_attacks_with_everyone() {
+        let views = [
+            unit(1, true),
+            unit(2, false),
+            enemy_at(3, Vec2::new(50.0, 0.0)),
+        ];
+        let c = cmds(&views, &[], &[], &[1, 2], Vec2::new(52.0, 0.0));
+        assert_eq!(
+            c,
+            [Command::Attack {
+                units: vec![ObjectId(1), ObjectId(2)],
+                target: ObjectId(3),
+                queue: false
+            }]
+        );
+    }
+
+    #[test]
+    fn right_click_on_an_enemy_building_attacks_it_and_own_units_are_just_ground() {
+        let views = [unit(1, false), unit_at(2, false, Vec2::new(500.0, 500.0))];
+        let enemy = building(9, PlayerId(1), BuildingKind::Barracks, None);
+        let c = cmds(&views, &[], &[enemy], &[1], Vec2::new(510.0, 510.0));
+        assert!(matches!(&c[..], [Command::Attack { target, .. }] if *target == ObjectId(9)));
+        let c = cmds(&views, &[], &[], &[1], Vec2::new(500.0, 500.0));
+        assert!(matches!(&c[..], [Command::Move { .. }]));
+    }
+
+    #[test]
+    fn attack_mode_click_attacks_an_enemy_or_attack_moves_to_the_ground() {
+        let views = [unit(1, false), enemy_at(3, Vec2::new(50.0, 0.0))];
+        let t = Targets {
+            views: &views,
+            nodes: &[],
+            buildings: &[],
+            local: ME,
+        };
+        let sel = [ObjectId(1)];
+        assert!(matches!(
+            attack_click_command(&t, &sel, Vec2::new(50.0, 0.0), 0.0, false),
+            Some(Command::Attack { .. })
+        ));
+        assert!(matches!(
+            attack_click_command(&t, &sel, Vec2::new(300.0, 0.0), 0.0, true),
+            Some(Command::AttackMove { queue: true, .. })
+        ));
+        assert!(attack_click_command(&t, &[], Vec2::ZERO, 0.0, false).is_none());
+    }
+
+    #[test]
+    fn train_slots_pick_the_unit_by_position() {
+        let barracks = building(1, ME, BuildingKind::Barracks, None);
+        let sel = [ObjectId(1)];
+        let kind = |slot| match &train_commands(std::slice::from_ref(&barracks), &sel, slot)[..] {
+            [Command::Train { kind, .. }] => Some(*kind),
+            _ => None,
+        };
+        assert_eq!(kind(0), Some(UnitKind::Soldier));
+        assert_eq!(kind(1), Some(UnitKind::Ranger));
+        assert_eq!(kind(2), Some(UnitKind::Brute));
+        assert_eq!(kind(3), None);
     }
 }

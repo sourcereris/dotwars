@@ -1,6 +1,9 @@
 //! Dot Wars rules. Headless: no macroquad, no floats, no clock.
 #![deny(clippy::disallowed_types, clippy::disallowed_methods)]
 
+pub mod combat;
+#[cfg(test)]
+mod combat_tests;
 pub mod components;
 pub mod data;
 pub mod economy;
@@ -10,11 +13,11 @@ mod production_tests;
 mod systems;
 
 use components::{
-    Body, Building, Construction, DropOff, GatherState, ObjectId, Order, Orders, PlayerStock,
-    Position, PrevPosition, Producer, ResourceNode, Team, Worker,
+    Body, Building, Combat, Construction, DropOff, GatherState, Health, LastHit, ObjectId, Order,
+    Orders, PlayerStock, Position, PrevPosition, Producer, ResourceNode, Team, Worker,
 };
 use data::{BuildingKind, UnitKind};
-use economy::{DROPOFF_RADIUS, NODE_AMOUNT, NODE_RADIUS, START_STOCK, WORKER_RADIUS};
+use economy::{DROPOFF_RADIUS, NODE_AMOUNT, NODE_RADIUS, START_STOCK};
 use hecs::{Entity, World};
 use phalanx_core::{Checksum, Fixed, FixedVec2, IdGen, PlayerId, Rng};
 use phalanx_sim::Simulation;
@@ -70,6 +73,18 @@ pub enum Command {
         buildings: Vec<ObjectId>,
         target: FixedVec2,
     },
+    /// Chase and hit `target`. Ignored if it is missing or not an enemy.
+    Attack {
+        units: Vec<ObjectId>,
+        target: ObjectId,
+        queue: bool,
+    },
+    /// Walk to `target`, fighting whatever comes within acquire range on the way.
+    AttackMove {
+        units: Vec<ObjectId>,
+        target: FixedVec2,
+        queue: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,9 +115,21 @@ pub enum Event {
         id: ObjectId,
         building: ObjectId,
     },
+    /// A hit landed (instant in the MVP). `ranged`: the client draws a tracer instead of a flash.
+    Attacked {
+        attacker: ObjectId,
+        target: ObjectId,
+        ranged: bool,
+    },
+    /// Already removed from the world, hence the owner and position.
+    Died {
+        id: ObjectId,
+        owner: PlayerId,
+        pos: FixedVec2,
+        building: bool,
+    },
 }
 
-pub const UNIT_RADIUS: Fixed = Fixed::from_int(8);
 /// World units per grid cell, and the map in cells (2048 x 1536 units).
 pub const CELL_SIZE: Fixed = Fixed::from_int(32);
 pub const MAP_CELLS: (u16, u16) = (64, 48);
@@ -117,6 +144,8 @@ pub struct DotWars {
     stocks: BTreeMap<PlayerId, PlayerStock>,
     /// Who occupies each cell: buildings (whole footprint) and resource nodes (one cell).
     grid: Grid<Option<ObjectId>>,
+    /// Ticks simulated so far. Only used to age `LastHit`.
+    tick: u32,
 }
 
 impl DotWars {
@@ -128,6 +157,7 @@ impl DotWars {
             index: BTreeMap::new(),
             stocks: BTreeMap::new(),
             grid: Grid::new(MAP_CELLS.0, MAP_CELLS.1, CELL_SIZE, None),
+            tick: 0,
         }
     }
 
@@ -168,35 +198,35 @@ impl DotWars {
     }
 
     pub fn spawn_unit(&mut self, pos: FixedVec2, owner: PlayerId) -> ObjectId {
+        self.spawn_kind(UnitKind::Soldier, pos, owner)
+    }
+
+    pub fn spawn_worker(&mut self, pos: FixedVec2, owner: PlayerId) -> ObjectId {
+        self.spawn_kind(UnitKind::Worker, pos, owner)
+    }
+
+    /// Every unit comes from here: stats are read from `data`.
+    pub fn spawn_kind(&mut self, kind: UnitKind, pos: FixedVec2, owner: PlayerId) -> ObjectId {
+        let def = data::unit(kind);
         let id = ObjectId(self.ids.next_id());
         let e = self.world.spawn((
             id,
             Position(pos),
             PrevPosition(pos),
             Team(owner),
-            Body {
-                radius: UNIT_RADIUS,
-            },
+            Body { radius: def.radius },
             Orders::default(),
-            UnitKind::Soldier,
+            kind,
+            Health {
+                hp: def.hp,
+                max: def.hp,
+            },
+            Combat::default(),
         ));
+        if kind == UnitKind::Worker {
+            let _ = self.world.insert_one(e, Worker::default());
+        }
         self.index.insert(id, e);
-        id
-    }
-
-    pub fn spawn_worker(&mut self, pos: FixedVec2, owner: PlayerId) -> ObjectId {
-        let id = self.spawn_unit(pos, owner);
-        let e = self.entity(id).expect("just spawned");
-        let _ = self.world.insert(
-            e,
-            (
-                Worker::default(),
-                UnitKind::Worker,
-                Body {
-                    radius: WORKER_RADIUS,
-                },
-            ),
-        );
         id
     }
 
@@ -351,6 +381,28 @@ impl DotWars {
             Command::Train { building, kind } => self.train(player, *building, *kind, events),
             Command::CancelTrain { building, slot } => self.cancel_train(player, *building, *slot),
             Command::SetRally { buildings, target } => self.set_rally(player, buildings, *target),
+            Command::Attack {
+                units,
+                target,
+                queue,
+            } => {
+                let enemy = self.entity(*target).is_some_and(|e| {
+                    self.world.satisfies::<&Health>(e).unwrap_or(false)
+                        && self.world.get::<&Team>(e).is_ok_and(|t| t.0 != player)
+                });
+                if enemy {
+                    let fighters = self.only_fighters(units);
+                    self.give_orders(player, &fighters, Order::Attack(*target), *queue);
+                }
+            }
+            Command::AttackMove {
+                units,
+                target,
+                queue,
+            } => {
+                let fighters = self.only_fighters(units);
+                self.give_orders(player, &fighters, Order::AttackMove(*target), *queue);
+            }
             Command::Stop { units } => {
                 for e in self.owned_targets(player, units) {
                     if let Ok(mut o) = self.world.get::<&mut Orders>(e) {
@@ -383,6 +435,15 @@ fn hash_order(h: &mut Checksum, o: &Order) {
         Order::Construct(b) => {
             h.u32(5);
             h.u32(b.0);
+        }
+        Order::Attack(t) => {
+            h.u32(6);
+            h.u32(t.0);
+        }
+        Order::AttackMove(t) => {
+            h.u32(7);
+            h.i32(t.x.raw());
+            h.i32(t.y.raw());
         }
     }
 }
@@ -424,6 +485,9 @@ impl Simulation for DotWars {
         self.run_build(events);
         self.run_construct(events);
         self.run_produce(events);
+        self.run_combat(events);
+        self.run_death(events);
+        self.tick += 1;
     }
 
     fn checksum(&self) -> u64 {
@@ -431,6 +495,7 @@ impl Simulation for DotWars {
         let (s, i) = self.rng.state();
         h.u64(s);
         h.u64(i);
+        h.u32(self.tick);
         for (id, e) in self.sorted_objects() {
             h.u32(id.0);
             if let Ok(p) = self.world.get::<&Position>(e) {
@@ -475,6 +540,26 @@ impl Simulation for DotWars {
             if let Ok(c) = self.world.get::<&Construction>(e) {
                 h.u32(c.done as u32);
                 h.u32(c.total as u32);
+            }
+            if let Ok(hp) = self.world.get::<&Health>(e) {
+                h.u32(hp.hp);
+                h.u32(hp.max);
+            }
+            if let Ok(c) = self.world.get::<&Combat>(e) {
+                h.u32(c.cooldown.remaining() as u32);
+                h.u32(c.target.map_or(u32::MAX, |t| t.0));
+                match c.anchor {
+                    Some(a) => {
+                        h.i32(a.x.raw());
+                        h.i32(a.y.raw());
+                    }
+                    None => h.u32(u32::MAX),
+                }
+                h.u32(c.retarget_in as u32);
+            }
+            if let Ok(l) = self.world.get::<&LastHit>(e) {
+                h.u32(l.by.0);
+                h.u32(l.tick);
             }
             if let Ok(p) = self.world.get::<&Producer>(e) {
                 h.u32(p.queue.len() as u32);

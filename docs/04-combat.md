@@ -52,8 +52,8 @@ Each attack type has a **bonus against one tag**. That alone is enough for a cou
 |---|---|---|---|---|---|---|---|---|---|
 | Worker | Light | 40 | 4 | – | melee | 20 | 4 | – (never auto) | economy |
 | Soldier | Medium | 70 | 8 | +8 vs Light | melee | 16 | 4 | 160 | beats Rangers: reaches them, bonus damage |
-| Ranger | Light | 45 | 7 | +7 vs Heavy | 120 | 24 | 4 | 200 | beats Brutes: shoots them from range |
-| Brute | Heavy | 160 | 16 | +8 vs Medium | melee | 30 | 3 | 160 | beats Soldiers: soaks and hits hard |
+| Ranger | Light | 45 | 8 | +14 vs Heavy | 150 | 20 | 4 | 220 | beats Brutes: shoots them from range |
+| Brute | Heavy | 130 | 16 | +8 vs Medium | melee | 30 | 3 | 160 | beats Soldiers: soaks and hits hard |
 | Buildings | Structure | 400–1000 | – | – | – | – | – | – | targets |
 
 - "Melee" means range 4: touching plus a little.
@@ -152,12 +152,12 @@ Add `Health`, `Combat` (cooldown, target, anchor, retarget_in), `LastHit`, and t
 | Step | What | Needs | Status |
 |---|---|---|---|
 | K0 | **Engine:** `nearest_by` and `Cooldown` in `phalanx_sim`; economy switches to them | — (touches `dotwars_sim`: after production's current step) | ✅ |
-| K1 | `Health` on units and buildings, `death` system, `Died`, cleanup (index, grid); client health bars and death effect | P1 | ⬜ |
-| K2 | Stats in `UnitDef`, per-unit speed, `Command::Attack`, `Order::Attack`, two-phase combat (chase, range, cooldown, hit), `Attacked`; client smart right click on an enemy + tracers | K0, K1 | ⬜ |
-| K3 | Auto-acquire: idle/Stop (leash + anchor), Hold (range only), `LastHit`, priority key, sticky retarget | K2 | ⬜ |
-| K4 | `Command::AttackMove`, `Order::AttackMove`, `A` attack mode (C7 done with K2 + K4) | K3 | ⬜ |
-| K5 | Ranger and Brute in `data.rs` + Barracks trains all three; counter smoke tests; the demo scenario's unit blocks become a mix | K3, P5 | ⬜ |
-| K6 | Building hp during construction, building death frees the grid and drops the queue | K1, P2 | ⬜ |
+| K1 | `Health` on units and buildings, `death` system, `Died`, cleanup (index, grid); client health bars and death effect | P1 | ✅ |
+| K2 | Stats in `UnitDef`, per-unit speed, `Command::Attack`, `Order::Attack`, two-phase combat (chase, range, cooldown, hit), `Attacked`; client smart right click on an enemy + tracers | K0, K1 | ✅ |
+| K3 | Auto-acquire: idle/Stop (leash + anchor), Hold (range only), `LastHit`, priority key, sticky retarget | K2 | ✅ |
+| K4 | `Command::AttackMove`, `Order::AttackMove`, `A` attack mode (C7 done with K2 + K4) | K3 | ✅ |
+| K5 | Ranger and Brute in `data.rs` + Barracks trains all three; counter smoke tests; the demo scenario's unit blocks become a mix | K3, P5 | ✅ |
+| K6 | Building hp during construction, building death frees the grid and drops the queue | K1, P2 | ✅ |
 | — | Projectiles in flight, area damage, armor values, abilities, towers, spatial hash for acquire (milestone 5) | K5 | ⬜ later |
 
 K1–K4 don't need training: the demo scenario's two unit blocks (12 vs 8) are already an arena once they get
@@ -271,8 +271,17 @@ and vanishes. A right click on a red building wears it down until it dies and fr
 
 ## Status
 
-**Implemented:** K0. **Next:** K1 (needs P1, which is done). The implementation plan for K1–K2 is above; K3–K6 get one when K2 lands.
-- K0: `phalanx_sim::nearest_by(from, candidates)` (key `(dist_sq, id)`, generic over the id) and `phalanx_sim::Cooldown`
-  (`new`, `ready`, `remaining`, `start`, `tick() -> bool` true only on the tick it hits 0), each with unit tests.
-  Economy dropped its own `nearest`; `GatherState::Harvesting` holds `timer: Cooldown`. Harvest timing is unchanged
-  (the checksum hashes `timer.remaining()`).
+**Implemented:** K0–K6 (sim and client; needs a human check in the game). **Next:** [05 Map](05-map.md) or [07 AI](07-ai.md).
+- Sim: `combat.rs` (`run_combat`, `run_death`, `damage`), `combat_tests.rs` (31 tests). Components `Health`, `Combat`, `LastHit`;
+  orders `Attack`, `AttackMove`; commands `Attack`, `AttackMove`; events `Attacked`, `Died`. `spawn_kind` is the one spawn path.
+  `step_toward` takes a speed, and `UnitDef.speed` replaced the global `SPEED`.
+- Client: health bars (damaged or selected), smart right click on an enemy, `A` attack mode (Shift queues and stays in the mode),
+  `Q`/`W`/`E` train slots, tracers/flashes/death bursts, a combat line in the F1 overlay.
+- Differences from the design:
+  - Balance numbers moved so the counter smoke tests hold without kiting: Ranger 8 dmg (+14 vs Heavy), range 150, cooldown 20,
+    acquire 220; Brute 130 hp. The tests lock only the winner of each 5v5.
+  - Building hp grows with a gain per construction tick and ignores buildings already at 0 hp (so a dead site can't be "healed").
+  - `LastHit` is written only on objects that have `Combat`.
+  - Client effects need the target to be alive when the frame draws, so the tracer of a mutual kill is skipped.
+- Not done: the demo scenario is still 2 soldiers per player (supply cap 10); mixed blocks for a bigger arena come with the AI or
+  map work. No hand playtest yet: check right click attack, `A`, Hold vs Stop, bars, and training Rangers/Brutes with `W`/`E`.

@@ -5,11 +5,11 @@
 //! new ids must come out the same on every machine.
 
 use crate::components::{
-    Body, Building, Construction, DropOff, ObjectId, Order, Orders, Position, Producer, Team,
-    Worker,
+    Body, Building, Construction, DropOff, Health, ObjectId, Order, Orders, Position, Producer,
+    Team, Worker,
 };
 use crate::data::{self, BuildingKind, QUEUE_MAX, SUPPLY_LIMIT, UnitKind};
-use crate::economy::step_toward;
+use crate::economy::{WORKER_SPEED, step_toward};
 use crate::{DotWars, Event};
 use hecs::Entity;
 use phalanx_core::{Fixed, FixedVec2, PlayerId};
@@ -28,6 +28,12 @@ pub enum TrainError {
     QueueFull,
     NotEnoughMinerals,
     SupplyBlocked,
+}
+
+/// Hit points of a building `done` of `total` ticks into construction: 10 % at the start, full at the end.
+pub(crate) fn build_hp(max: u32, done: u16, total: u16) -> u32 {
+    let base = max / 10;
+    base + ((max - base) as u64 * done as u64 / total.max(1) as u64) as u32
 }
 
 impl DotWars {
@@ -92,12 +98,18 @@ impl DotWars {
         let (w, h) = def.size;
         let id = ObjectId(self.ids.next_id());
         let half = Fixed(w.min(h) as i32 * self.grid.cell_size().raw() / 2);
+        let hp = if finished {
+            def.hp
+        } else {
+            build_hp(def.hp, 0, def.build_ticks)
+        };
         let e = self.world.spawn((
             id,
             Position(self.grid.rect_center(cell, w, h)),
             Team(owner),
             Body { radius: half },
             Building { kind, cell },
+            Health { hp, max: def.hp },
         ));
         self.index.insert(id, e);
         self.grid.fill_rect(cell, w, h, Some(id));
@@ -124,18 +136,6 @@ impl DotWars {
         }
         if def.drop_off {
             let _ = self.world.insert_one(e, DropOff);
-        }
-    }
-
-    pub(crate) fn spawn_kind(
-        &mut self,
-        kind: UnitKind,
-        pos: FixedVec2,
-        owner: PlayerId,
-    ) -> ObjectId {
-        match kind {
-            UnitKind::Worker => self.spawn_worker(pos, owner),
-            UnitKind::Soldier => self.spawn_unit(pos, owner),
         }
     }
 
@@ -251,7 +251,7 @@ impl DotWars {
             } else {
                 let center = self.grid.rect_center(cell, w, h);
                 let half = Fixed(w.min(h) as i32 * self.grid.cell_size().raw() / 2);
-                if step_toward(&mut pos, center, half + wr) {
+                if step_toward(&mut pos, center, half + wr, WORKER_SPEED) {
                     result = Some(self.can_place(team, kind, cell));
                 }
             }
@@ -315,7 +315,7 @@ impl DotWars {
                 }
                 continue;
             };
-            let arrived = step_toward(&mut pos, bpos, br + wr);
+            let arrived = step_toward(&mut pos, bpos, br + wr, WORKER_SPEED);
             if let Ok(mut p) = self.world.get::<&mut Position>(e) {
                 p.0 = pos;
             }
@@ -324,6 +324,12 @@ impl DotWars {
             }
             let done = c.done + 1;
             if done >= c.total {
+                if let Ok(mut h) = self.world.get::<&mut Health>(be)
+                    && h.hp > 0
+                {
+                    let gain = h.max - build_hp(h.max, c.done, c.total).min(h.max);
+                    h.hp = (h.hp + gain).min(h.max);
+                }
                 if let Some(kind) = self.world.get::<&Building>(be).ok().map(|b| b.kind) {
                     self.finish_building(be, kind);
                 }
@@ -331,8 +337,16 @@ impl DotWars {
                 if let Ok(mut o) = self.world.get::<&mut Orders>(e) {
                     o.current = None;
                 }
-            } else if let Ok(mut cons) = self.world.get::<&mut Construction>(be) {
-                cons.done = done;
+            } else {
+                if let Ok(mut cons) = self.world.get::<&mut Construction>(be) {
+                    cons.done = done;
+                }
+                if let Ok(mut h) = self.world.get::<&mut Health>(be)
+                    && h.hp > 0
+                {
+                    let gain = build_hp(h.max, done, c.total) - build_hp(h.max, c.done, c.total);
+                    h.hp = (h.hp + gain).min(h.max);
+                }
             }
         }
     }
